@@ -30,11 +30,21 @@ function App() {
     }
     console.log("Resume:", resume);
     console.log("Job Description:", jd);
-    const res = await axios.post("http://localhost:8080/api/parse", {
-      resume_file: resume,
-      job_description: jd,
-    });
-    console.log(res.data);
+
+    // 1. Create a new FormData object
+    const formData = new FormData();
+    
+    // 2. Append your data exactly matching the keys the Go backend expects
+    formData.append("resume_file", resume);
+    formData.append("job_description", jd);
+
+    try {
+      // 3. Send the formData object directly instead of a generic {} object
+      const res = await axios.post("http://localhost:8080/api/parse", formData);
+      console.log(res.data);
+    } catch (error) {
+      console.error("Error uploading data:", error);
+    }
   };
 
   return (
