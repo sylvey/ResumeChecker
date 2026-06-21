@@ -6,6 +6,7 @@ import "./App.css";
 import { TextField, Box, Button } from "@mui/material";
 import pkg from "file-uploader-js";
 const FileUploader = pkg.default;
+import axios from "axios";
 
 function App() {
   const [resume, setResume] = useState(null);
@@ -17,7 +18,24 @@ function App() {
     }
   }, [jd]);
 
-  const onSubmit = (e) => {};
+  const onSubmit = (e) => {
+    e.preventDefault();
+    if (!resume) {
+      alert("Please upload your resume.");
+      return;
+    }
+    if (!jd) {
+      alert("Please enter the job description.");
+      return;
+    }
+    console.log("Resume:", resume);
+    console.log("Job Description:", jd);
+    const res = await axios.post("http://localhost:8080/api/parse", {
+      resume_file: resume,
+      job_description: jd,
+    });
+    console.log(res.data);
+  };
 
   return (
     <>
