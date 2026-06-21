@@ -18,7 +18,7 @@ function App() {
     }
   }, [jd]);
 
-  const onSubmit = (e) => {
+  const onSubmit = async (e) => {
     e.preventDefault();
     if (!resume) {
       alert("Please upload your resume.");
