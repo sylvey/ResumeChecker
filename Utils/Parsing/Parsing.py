@@ -3,11 +3,17 @@ from statistics import median
 
 
 def split_resume_into_sections(pdf_path, size_ratio=1.05, debug=False):
-   
+    
     words = []
+    rules = []
     page_offset = 0
+    page_width = None
+
     with pdfplumber.open(pdf_path) as pdf:
         for page_num, page in enumerate(pdf.pages):
+            if page_width is None:
+                page_width = page.width
+
             for w in page.extract_words(extra_attrs=["size", "fontname"]):
                 fontname = w.get("fontname", "")
                 words.append({
@@ -15,8 +21,18 @@ def split_resume_into_sections(pdf_path, size_ratio=1.05, debug=False):
                     "size": round(w["size"], 1),
                     "top": w["top"] + page_offset,
                     "x0": round(w["x0"], 1),
+                    "x1": round(w["x1"], 1),
                     "is_bold": "bold" in fontname.lower(),
                 })
+
+            min_len = page.width * 0.5
+            for l in page.lines:
+                if abs(l["top"] - l["bottom"]) < 1 and (l["x1"] - l["x0"]) >= min_len:
+                    rules.append(l["top"] + page_offset)
+            for r in page.rects:
+                if abs(r["bottom"] - r["top"]) < 2 and (r["x1"] - r["x0"]) >= min_len:
+                    rules.append(r["top"] + page_offset)
+
             page_offset += page.height
 
             if debug:
@@ -29,7 +45,13 @@ def split_resume_into_sections(pdf_path, size_ratio=1.05, debug=False):
 
     body_size = median(w["size"] for w in words)
     heading_threshold = body_size * size_ratio
-    left_margin = min(w["x0"] for w in words)  
+    left_margin = min(w["x0"] for w in words)
+    rules.sort()
+
+    has_lines = len(rules) > 0          
+
+    def has_rule_below(line_top, line_bottom, within=12):
+        return any(line_bottom - 2 <= r <= line_bottom + within for r in rules)
 
     words.sort(key=lambda w: (w["top"], w["x0"]))
     lines = []
@@ -49,30 +71,46 @@ def split_resume_into_sections(pdf_path, size_ratio=1.05, debug=False):
     current_heading = "HEADER"
     current_lines = []
 
+    BULLETS = {"•", "●", "▪", "‣", "◦", "-", "*", "·", "∗", "○"}
+
     for line in lines:
         line_text = " ".join(w["text"] for w in line).strip()
         if not line_text:
             continue
 
         line_x0 = min(w["x0"] for w in line)
+        line_x1 = max(w["x1"] for w in line)
+        line_top = min(w["top"] for w in line)
+        line_bottom = line_top + max(w["size"] for w in line)
         max_size = max(w["size"] for w in line)
         all_bold = all(w["is_bold"] for w in line)
 
         letters = [c for c in line_text if c.isalpha()]
         is_allcaps = len(letters) >= 2 and all(c.isupper() for c in letters)
 
-       
-        at_left = abs(line_x0 - left_margin) <= 8   
-
-        looks_like_heading = (
-            max_size >= heading_threshold   
-            or all_bold                     
-            or is_allcaps                   
-        )
+        at_left = abs(line_x0 - left_margin) <= 8
+        left_gap, right_gap = line_x0, page_width - line_x1
+        is_centered = abs(left_gap - right_gap) <= 5 and left_gap > left_margin + 20
+        good_position = at_left or is_centered
 
         is_short = len(line_text.split()) <= 5
+        starts_with_bullet = line_text.lstrip()[:1] in BULLETS
 
-        is_heading = at_left and looks_like_heading and is_short
+        if has_lines:
+            is_heading = (
+                is_short
+                and not starts_with_bullet
+                and good_position
+                and has_rule_below(line_top, line_bottom)
+            )
+        else:
+            looks_styled = (max_size >= heading_threshold or all_bold or is_allcaps)
+            is_heading = (
+                is_short
+                and not starts_with_bullet
+                and good_position
+                and looks_styled
+            )
 
         if is_heading:
             sections.append({
@@ -106,6 +144,6 @@ if __name__ == "__main__":
             sections = split_resume_into_sections(path)
             for i, sec in enumerate(sections):
                 print(f"\n===== Section {i}: {sec['heading']!r} =====")
-                print(sec["content"][:200])
+                print(sec["content"][:150])
         except Exception as e:
             print(f"✗ FAILED: {e}")
