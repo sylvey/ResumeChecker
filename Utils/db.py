@@ -17,8 +17,8 @@ def get_db():
     client = MongoClient(MONGO_URI)
     db = client[DB_NAME]
  
-    # Re-scoring the same resume/JD pair should overwrite cleanly rather than
-    # silently accumulating duplicate training rows.
+    # Re-scoring the same resume/JD pair overwrites rather than accumulating
+    # duplicate training rows. submit_scores must upsert on this key.
     db.annotations.create_index(
         [
             ("resume_id", ASCENDING),
@@ -27,6 +27,7 @@ def get_db():
             ("jd_section_name", ASCENDING),
         ],
         name="pair_identity",
+        unique=True,
     )
     # The training exporter reads by source (llm vs human) and by score band.
     db.annotations.create_index([("source", ASCENDING)], name="by_source")

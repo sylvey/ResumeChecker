@@ -5,55 +5,60 @@ import sys
 
 import anthropic
 from dotenv import load_dotenv
+from tools import dispatch, TOOLS, new_ctx, ValidationError
+from Parsing.Parsing import ParseError
+from db import get_db
 
-from retail_agent import db
-from retail_agent.tools import TOOLS, dispatch
 
 load_dotenv() 
 
 MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6")
 
-SYSTEM_PROMPT = f"""You are the scoring engine for ResumeChecker. You receive one resume and one job description, and you produce matching scores between every resume section and every JD section.
-
-You never see raw documents directly. Use the tools to parse them first:
-- parse_resume(pdf_path) returns the resume split into 4 sections: EDUCATION, EXPERIENCE, PROJECTS, SKILLS.
+SYSTEM_PROMPT = """You are the scoring engine for ResumeChecker. You receive one resume and one job description, and you produce matching scores between every resume section and every JD section.
+ 
+You never see the raw documents directly -- the tools are your only access to them:
+- parse_resume(pdf_path) returns the resume split into sections, with headings verbatim. Each section is a dict with "heading" and "content" keys.
 - parse_jd(jd_text) returns the JD split into 4 sections: job_title, minimum_requirements, preferred_qualifications, other_information.
-
-Workflow (follow in order):
-1. Call parse_resume and parse_jd. Do not attempt to score anything before both have returned.
-2. Read all 8 sections carefully. Score all 16 resume-section x JD-section pairs yourself — this judgment is yours to make, not a tool's.
-3. Call submit_scores exactly once with all 16 scores and a one-sentence rationale for each.
-
+ 
+Workflow, in order:
+1. Call parse_resume and parse_jd. Do not score anything before both have returned.
+2. Read all sections carefully. Score all resume-section x JD-section pairs yourself. This judgment is yours to make -- no tool does it for you.
+3. Call submit_scores exactly once, with all pairs, each carrying the section text you scored, your score, and a one-sentence rationale.
+4. Report the overall score that submit_scores returns, plus a brief read on where the candidate is strong and where the gaps are. Do not compute the overall score yourself -- read it back from the tool result.
+ 
 Scoring scale (1.0 to 10.0, one decimal allowed):
 - 9-10: directly and strongly relevant; clear evidence the resume section satisfies what the JD section asks for.
 - 7-8: solid relevance with good overlap.
-- 5-6: partial or adjacent relevance. IMPORTANT: if the candidate has the SAME job ROLE but a DIFFERENT tech stack (e.g. a full-stack developer with Spring experience against a role demanding Django or .NET), score 5-6, NOT low. Transferable role experience and skills still count for a lot.
+- 5-6: partial or adjacent relevance. IMPORTANT: if the candidate has the SAME job ROLE but a DIFFERENT tech stack (e.g. a full-stack developer with Spring experience against a role demanding Django or .NET), score 5-6, NOT low. Transferable role experience counts for a lot.
 - 3-4: weak or tangential relevance.
 - 1-2: essentially unrelated.
-
-Never score 0, and never score a same-role/different-stack pair as 1-2. A mismatched stack within the same role family is a 5-6.
-
+ 
+Never score 0. Never score a same-role/different-stack pair as 1-2 -- a mismatched stack within the same role family is a 5-6.
+ 
 How to read each pair:
 - Against job_title: how well does this resume section fit that role?
 - Against minimum_requirements / preferred_qualifications: how well does this resume section satisfy those specific requirements?
-- Against other_information: usually lower-signal (logistics, company blurb, benefits) unless it states real requirements. Score what's actually there — don't inflate.
+- Against other_information: usually low-signal (logistics, company blurb, benefits) unless it states real requirements. Score what is actually there; don't inflate it.
+ 
+Judge every pair on the content the tools returned, not on assumptions about the candidate.
 
-Judge each pair on the actual content returned by the tools. If a section came back empty, score its pairs low (1-2) and say so in the rationale. Base every score on evidence present in the text, not on assumptions about the candidate.
+Every rationale must be one concrete sentence naming what did or did not line up -- "backend experience is Spring/Java while the role requires Django/Python" is useful; "no overlap" is not. These rationales are stored as training data.
+ 
+Score each pair independently. Low scores are as valuable as high ones: they are the negative examples the training set needs. Do not be generous, and do not compress everything toward the middle.
+ 
+Keep your final response short and concrete. No preamble."""
 
-Each rationale must be one sentence, concrete, and cite what in the resume section did or didn't line up with the JD section. These rationales become training data, so make them specific — "no overlap" is useless, "backend experience is Spring/Java while the role requires Django/Python" is useful.
 
-Score every pair independently. Low scores are as valuable as high ones — do not avoid low scores to be generous, and do not compress everything toward the middle.
-"""
-
-
-def run_agent_turn(client, conn, messages: list) -> str:
+def run_agent_turn(client, db, ctx, messages: list) -> str:
     """Runs one user turn to completion: repeatedly calls the model, executing
     any tool calls, until it produces a final text response. Mutates
     `messages` in place so history persists across turns."""
+
+    
     while True:
         response = client.messages.create(
             model=MODEL,
-            max_tokens=2000,
+            max_tokens=8000,
             system=SYSTEM_PROMPT,
             tools=TOOLS,
             messages=messages,
@@ -68,10 +73,10 @@ def run_agent_turn(client, conn, messages: list) -> str:
             if block.type != "tool_use":
                 continue
             try:
-                result = dispatch(conn, block.name, block.input)
+                result = dispatch(ctx, db, block.name, block.input)
                 content = json.dumps(result, default=str)
                 is_error = False
-            except db.BusinessError as e:
+            except (ParseError, ValidationError) as e:
                 content = str(e)
                 is_error = True
             except Exception as e:
@@ -96,6 +101,7 @@ def main():
     jd_text    = open(jd_path).read()
 
     client = anthropic.Anthropic()
+    db = get_db()
     messages = [{
         "role": "user",
         "content": (
@@ -104,7 +110,8 @@ def main():
             f"Job description text:\n{jd_text}"
         )
     }]
-    reply = run_agent_turn(client, messages)
+    reply = run_agent_turn(client, db, new_ctx(), messages)
+
     print(reply)
 
 

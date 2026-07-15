@@ -1,6 +1,14 @@
 import pdfplumber
 from statistics import median
+import os, glob
 
+# JD parsing is fixed-shape; resume parsing is not.
+JD_SECTIONS = ["job_title", "minimum_requirements",
+               "preferred_qualifications", "other_information"]
+ 
+
+class ParseError(Exception):
+    """Raised when a document can't be read or split into sections."""
 
 def split_resume_into_sections(pdf_path, size_ratio=1.05, debug=False):
     
@@ -130,8 +138,65 @@ def split_resume_into_sections(pdf_path, size_ratio=1.05, debug=False):
     return [s for s in sections if s["content"] or s["heading"] != "HEADER"]
 
 
+ 
+def parse_resume(pdf_path: str) -> dict:
+    """Tool entry point: split a resume PDF into sections, headings verbatim.
+ 
+    Returns {"sections": [{"heading": ..., "content": ...}, ...]}.
+    """
+    if not os.path.exists(pdf_path):
+        raise ParseError(f"No such file: {pdf_path}")
+    if not pdf_path.lower().endswith(".pdf"):
+        raise ParseError(f"Not a PDF: {pdf_path}")
+ 
+    try:
+        sections = split_resume_into_sections(pdf_path)
+    except Exception as e:
+        raise ParseError(f"Could not parse {os.path.basename(pdf_path)}: {e}") from e
+ 
+    if not sections:
+        raise ParseError(
+            f"No text extracted from {os.path.basename(pdf_path)} -- it may be a scanned or "
+            "image-only PDF."
+        )
+ 
+    # A repeated heading (e.g. a section continuing onto page 2) would make
+    # resume_section_name ambiguous at submission time, so merge them into one.
+    merged = {}
+    for s in sections:
+        h = s["heading"]
+        merged[h] = f"{merged[h]}\n{s['content']}".strip() if h in merged else s["content"]
+ 
+    return {"sections": [{"heading": h, "content": c} for h, c in merged.items()]}
+ 
+ 
+def parse_jd(jd_text: str) -> dict:
+    """Tool entry point: split JD text into the 4 canonical sections.
+ 
+    TODO(A-line): swap the body for the real parse_description(jd_text).
+    It must return exactly the 4 keys in JD_SECTIONS, using "" when absent.
+    """
+    if not jd_text or not jd_text.strip():
+        raise ParseError("jd_text is empty.")
+ 
+    # --- placeholder: replace with parse_description(jd_text) -------------
+    sections = {
+        "job_title": "[placeholder] Backend Engineer (Django)",
+        "minimum_requirements": "[placeholder] 3+ yrs backend development. Python. Django. PostgreSQL. REST API design.",
+        "preferred_qualifications": "[placeholder] Docker, AWS, CI/CD experience. Prior startup experience.",
+        "other_information": "[placeholder] Hybrid, 2 days in office. Taipei. Competitive salary and equity.",
+    }
+    # ----------------------------------------------------------------------
+ 
+    missing = [s for s in JD_SECTIONS if s not in sections]
+    if missing:
+        raise ParseError(f"JD parser did not return required sections: {missing}")
+ 
+    return {k: sections.get(k, "") for k in JD_SECTIONS} 
+
+
 if __name__ == "__main__":
-    import os, glob
+    
 
     folder = "../../Training_Data/Resume/"
     pdf_paths = sorted(glob.glob(os.path.join(folder, "*.pdf")))
