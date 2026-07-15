@@ -47,8 +47,8 @@ def _parse_resume_tool(ctx, pdf_path: str) -> dict:
     return result
 
 
-def _parse_jd_tool(ctx, jd_text: str) -> dict:
-    result = parse_jd(jd_text)
+def _parse_jd_tool(ctx, jd_text: str, job_title: str) -> dict:
+    result = parse_jd(jd_text, job_title)
     ctx["jd"] = dict(result)
     return result
  
@@ -94,8 +94,21 @@ TOOLS = [
                     "type": "string",
                     "description": "Raw job description text.",
                 },
+                "job_title": {
+                    "type": "string",
+                    "description": (
+                        "Split a job description into its four sections: job_title, "
+                        "minimum_requirements, preferred_qualifications, other_information. Call this "
+                        "before scoring. jd_text is often pasted straight from a job page, so it can "
+                        "contain navigation links, buttons, and company boilerplate mixed in with the "
+                        "actual posting -- you read it and pass the real role title as job_title. "
+                        "other_information holds whatever didn't belong to the requirement sections "
+                        "(company blurb, logistics, benefits, and any page junk) -- it is often "
+                        "low-signal, so score it for what is actually there rather than inflating it."
+                    ),
+                },
             },
-            "required": ["jd_text"],
+            "required": ["jd_text", "job_title"],
         },
     },
     {

@@ -1,11 +1,25 @@
 import pdfplumber
 from statistics import median
 import os, glob
+import os, glob, re
 
 # JD parsing is fixed-shape; resume parsing is not.
 JD_SECTIONS = ["job_title", "minimum_requirements",
                "preferred_qualifications", "other_information"]
- 
+
+BULLET = re.compile(r"^\s*[•●▪‣◦\-\*·–]+\s*")
+REQ_HDR = re.compile(
+    r"(?i)\b(requirements?|required skills?|must[- ]?have|qualifications?|"
+    r"what (we expect|you('?ll| will)? need)|you (should )?have|"
+    r"necessary skills?|hard skills?|skills? (&|and) experience)\b")
+PREF_HDR = re.compile(
+    r"(?i)\b(nice[- ]?to[- ]?have|preferred|would be a plus|will be a plus|"
+    r"good to have|as a plus|bonus|optional|desirable|advantage)\b")
+OTHER_HDR = re.compile(
+    r"\b(about|who we are|company|team|benefits|perks|what we offer|"
+    r"responsibilities|role|overview|description|culture|mission)\b",
+    re.IGNORECASE,
+)
 
 class ParseError(Exception):
     """Raised when a document can't be read or split into sections."""
@@ -168,31 +182,51 @@ def parse_resume(pdf_path: str) -> dict:
         merged[h] = f"{merged[h]}\n{s['content']}".strip() if h in merged else s["content"]
  
     return {"sections": [{"heading": h, "content": c} for h, c in merged.items()]}
+
+
+def parse_description(text):
+    mins, prefs, bucket = [], [], None
+    rest = []
+    for raw in (text or "").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        short = len(line.split()) <= 8          # headers are short lines
+        if short and PREF_HDR.search(line):
+            bucket = "pref"; continue
+        if short and REQ_HDR.search(line):
+            bucket = "min"; continue
+        if short and OTHER_HDR.search(line):
+            bucket = None; continue
+        clean = BULLET.sub("", line).strip()
+        if not clean:
+            continue
+        if bucket == "min":
+            mins.append(clean)
+        elif bucket == "pref":
+            prefs.append(clean)
+        else:
+            rest.append(clean)
+    return mins, prefs, rest
  
- 
-def parse_jd(jd_text: str) -> dict:
+def parse_jd(jd_text: str, job_title: str = "") -> dict:
     """Tool entry point: split JD text into the 4 canonical sections.
- 
-    TODO(A-line): swap the body for the real parse_description(jd_text).
-    It must return exactly the 4 keys in JD_SECTIONS, using "" when absent.
+
+    job_title is supplied by the caller, not parsed out: jd_text is typically a
+    raw page copy (navigation, buttons, company boilerplate) with the title at
+    no fixed position, so identifying it is a judgment call the agent makes.
     """
     if not jd_text or not jd_text.strip():
         raise ParseError("jd_text is empty.")
- 
-    # --- placeholder: replace with parse_description(jd_text) -------------
-    sections = {
-        "job_title": "[placeholder] Backend Engineer (Django)",
-        "minimum_requirements": "[placeholder] 3+ yrs backend development. Python. Django. PostgreSQL. REST API design.",
-        "preferred_qualifications": "[placeholder] Docker, AWS, CI/CD experience. Prior startup experience.",
-        "other_information": "[placeholder] Hybrid, 2 days in office. Taipei. Competitive salary and equity.",
+
+    mins, prefs, rest = parse_description(jd_text)
+
+    return {
+        "job_title": (job_title or "").strip(),
+        "minimum_requirements": "\n".join(mins),
+        "preferred_qualifications": "\n".join(prefs),
+        "other_information": "\n".join(rest),
     }
-    # ----------------------------------------------------------------------
- 
-    missing = [s for s in JD_SECTIONS if s not in sections]
-    if missing:
-        raise ParseError(f"JD parser did not return required sections: {missing}")
- 
-    return {k: sections.get(k, "") for k in JD_SECTIONS} 
 
 
 if __name__ == "__main__":
