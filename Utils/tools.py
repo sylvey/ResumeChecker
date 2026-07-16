@@ -26,6 +26,7 @@ Scoring vs. overall score:
 - The overall score = max per resume section, then averaged over sections.
 """
  
+from collections import defaultdict
 from datetime import datetime, timezone
 from Parsing.Parsing import JD_SECTIONS, ParseError, parse_jd, parse_resume
  
@@ -47,12 +48,90 @@ def _parse_resume_tool(ctx, pdf_path: str) -> dict:
     return result
 
 
-def _parse_jd_tool(ctx, jd_text: str, job_title: str) -> dict:
-    result = parse_jd(jd_text, job_title)
+def _parse_jd_tool(ctx, jd_text: str) -> dict:
+    result = parse_jd(jd_text)
     ctx["jd"] = dict(result)
     return result
+
+def submit_scores(ctx, db, resume_id, jd_id, skipped_sections, pairs) -> dict:
+    """Validate and persist the scores the model submitted, then return the overall score.
  
- 
+    The model is expected to have judged every pair itself, so this function does not
+    compute any scores -- it just validates the schema and stores the result.
+    """
+    if ctx["resume"] is None or ctx["jd"] is None:
+        raise ValidationError("parse_resume and parse_jd must be called before submit_scores.")
+    
+    # Validate that the section names in the pairs are actually present in the parsed results.
+    for p in pairs:
+        r_name = p["resume_section_name"]
+        j_name = p["jd_section_name"]
+        if r_name not in ctx["resume"]:
+            raise ValidationError(f"Unknown resume section '{r_name}' in pairs.")
+        if j_name not in ctx["jd"]:
+            raise ValidationError(f"Unknown JD section '{j_name}' in pairs.")
+    
+    # Validate that the skipped sections are actually present in the parsed results.
+    for s in skipped_sections:
+        doc = s["document"]
+        name = s["section_name"]
+        if doc == "resume" and name not in ctx["resume"]:
+            raise ValidationError(f"Unknown resume section '{name}' in skipped_sections.")
+        if doc == "jd" and name not in ctx["jd"]:
+            raise ValidationError(f"Unknown JD section '{name}' in skipped_sections.")
+        
+    # Validate that every resume section was either scored or skipped, and every JD section was either scored or skipped.
+    resume_section_covered = {p["resume_section_name"] for p in pairs}.union(
+        {s["section_name"] for s in skipped_sections if s["document"] == "resume"}
+    )
+    jd_section_covered = {p["jd_section_name"] for p in pairs}.union(
+        {s["section_name"] for s in skipped_sections if s["document"] == "jd"}
+    )   
+    missing_resume_sections = set(ctx["resume"].keys()) - resume_section_covered
+    missing_jd_sections = set(ctx["jd"].keys()) - jd_section_covered
+    if missing_resume_sections:
+        raise ValidationError(f"Resume sections not scored or skipped: {sorted( missing_resume_sections)}")
+    if missing_jd_sections:
+        raise ValidationError(f"JD sections not scored or skipped: {sorted(missing_jd_sections)}")
+    
+    # Upsert the scores into the database.
+    now = datetime.now(timezone.utc)
+    for p in pairs:
+        db.annotations.update_one(
+            {
+                "resume_id": resume_id, 
+                "jd_id": jd_id,
+                "resume_section_name": p["resume_section_name"],
+                "jd_section_name": p["jd_section_name"],
+            },
+            {
+                "$set": {
+                    "resume_section_name": p["resume_section_name"],
+                    "jd_section_name": p["jd_section_name"],
+                    "matching_score": p["matching_score"],
+                    "rationale": p["rationale"],
+                    "source": "llm",
+                    "created_at": now,
+                }
+            },
+            upsert=True
+        )
+    
+    # Compute the overall score: max per resume section, then average over sections.
+    by_section = defaultdict(list)
+    for pair in pairs:
+        by_section[pair["resume_section_name"]].append(pair["matching_score"])
+    section_maxes = [max(scores) for scores in by_section.values()]
+    overall_score = sum(section_maxes) / len(section_maxes) if section_maxes else 0.0
+
+    result = {"resume_id": resume_id,
+            "jd_id": jd_id,
+            "overall_score": overall_score,
+            "pairs_stored": len(pairs),
+    }
+    ctx["submit_scores_result"] = result
+    return result
+
 TOOLS = [
     {
         "name": "parse_resume",
@@ -94,21 +173,8 @@ TOOLS = [
                     "type": "string",
                     "description": "Raw job description text.",
                 },
-                "job_title": {
-                    "type": "string",
-                    "description": (
-                        "Split a job description into its four sections: job_title, "
-                        "minimum_requirements, preferred_qualifications, other_information. Call this "
-                        "before scoring. jd_text is often pasted straight from a job page, so it can "
-                        "contain navigation links, buttons, and company boilerplate mixed in with the "
-                        "actual posting -- you read it and pass the real role title as job_title. "
-                        "other_information holds whatever didn't belong to the requirement sections "
-                        "(company blurb, logistics, benefits, and any page junk) -- it is often "
-                        "low-signal, so score it for what is actually there rather than inflating it."
-                    ),
-                },
             },
-            "required": ["jd_text", "job_title"],
+            "required": ["jd_text"],
         },
     },
     {
