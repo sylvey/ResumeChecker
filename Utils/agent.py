@@ -10,7 +10,7 @@ from Parsing.Parsing import ParseError
 from db import get_db
 
 
-load_dotenv() 
+
 
 MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6")
 
@@ -92,8 +92,12 @@ def run_agent_turn(client, db, ctx, messages: list) -> str:
 
 
 def main():
+    load_dotenv() 
     if not os.environ.get("ANTHROPIC_API_KEY"):
         print("Set ANTHROPIC_API_KEY (or put it in .env)", file=sys.stderr)
+        sys.exit(1)
+    if not os.environ.get("MONGO_URI"):
+        print("Set MONGO_URI (or put it in .env)", file=sys.stderr)
         sys.exit(1)
 
     resume_pdf = sys.argv[1]
@@ -110,9 +114,21 @@ def main():
             f"Job description text:\n{jd_text}"
         )
     }]
-    reply = run_agent_turn(client, db, new_ctx(), messages)
+    ctx = new_ctx()
+    reply = run_agent_turn(client, db, ctx, messages)
 
     print(reply)
+    result = ctx.get("submit_scores_result")
+    pairs = list(db.annotations.find(
+        {"resume_id": result["resume_id"], "jd_id": result["jd_id"]},
+        {"_id": 0}
+    ))
+    output = {
+        "overall_score": result["overall_score"],
+        "pairs_stored": result["pairs_stored"],
+        "pairs": pairs,
+    }
+    print(json.dumps(output, default=str, indent=2))
 
 
 if __name__ == "__main__":

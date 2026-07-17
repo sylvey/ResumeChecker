@@ -7,14 +7,16 @@ model will train on, so no unpacking step later.
 import os
  
 from pymongo import ASCENDING, MongoClient
+from pymongo.server_api import ServerApi
  
-MONGO_URI = os.environ.get("MONGO_URI", "mongodb://localhost:27017")
-DB_NAME = os.environ.get("MONGO_DB", "resumechecker")
- 
+
  
 def get_db():
     """Connect and ensure indexes. Called once at startup."""
-    client = MongoClient(MONGO_URI)
+    MONGO_URI = os.environ.get("MONGO_URI", "mongodb://localhost:27017")
+    DB_NAME = os.environ.get("MONGO_DB", "resumechecker")
+ 
+    client = MongoClient(MONGO_URI, server_api=ServerApi('1'))
     db = client[DB_NAME]
  
     # Re-scoring the same resume/JD pair overwrites rather than accumulating
