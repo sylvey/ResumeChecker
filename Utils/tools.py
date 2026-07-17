@@ -108,6 +108,8 @@ def submit_scores(ctx, db, resume_id, jd_id, skipped_sections, pairs) -> dict:
                 "$set": {
                     "resume_section_name": p["resume_section_name"],
                     "jd_section_name": p["jd_section_name"],
+                    "resume_section_content": p["resume_section_content"],
+                    "jd_section_content": p["jd_section_content"],
                     "matching_score": p["matching_score"],
                     "rationale": p["rationale"],
                     "source": "llm",
