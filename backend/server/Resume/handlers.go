@@ -2,43 +2,40 @@ package Resume
 
 import (
 	"bytes"
+	"io"
+	"mime/multipart"
 	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
-	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/ledongthuc/pdf"
 )
 
-type ParsedResume struct {
-	Name            string `json:"Name"`
-	Email           string `json:"Email"`
-	Education       string `json:"Education"`
-	TechnicalSkills string `json:"Technical Skills"`
-	Experience      string `json:"Experience"`
+// scoreServiceURL is where the Python Flask agent pipeline listens.
+// Override with the SCORE_SERVICE_URL env var if it runs elsewhere.
+func scoreServiceURL() string {
+	if url := os.Getenv("SCORE_SERVICE_URL"); url != "" {
+		return url
+	}
+	return "http://localhost:5001/score"
 }
 
-type ParsedJobDescription struct {
-	JobDescription string `json:"Job Description Text"`
-}
+// The agent runs a multi-step Claude tool loop that can take tens of seconds,
+// so give the forwarded request a generous timeout.
+var httpClient = &http.Client{Timeout: 5 * time.Minute}
 
-type ParseResult struct {
-	Resume         ParsedResume         `json:"parsed_resume"`
-	JobDescription ParsedJobDescription `json:"parsed_job_description"`
-}
-
+// ParseHandler validates the uploaded resume + job description and forwards them
+// to the Python scoring service, relaying its response back to the caller.
 var ParseHandler = func(c *gin.Context) {
-
+	// 1. Validate the job description text.
 	jdText := c.PostForm("job_description")
 	if jdText == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "job_description field is required"})
 		return
 	}
-	parsedJD := ParsedJobDescription{JobDescription: jdText}
 
-	// 2. Extract and validate the PDF resume file
+	// 2. Validate the uploaded PDF resume.
 	file, err := c.FormFile("resume_file")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "resume_file field is required"})
@@ -49,101 +46,62 @@ var ParseHandler = func(c *gin.Context) {
 		return
 	}
 
-	// 3. Save the uploaded file temporarily
-	tempFile, err := os.CreateTemp("", "resume-*.pdf")
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create temp file"})
-		return
-	}
-	defer os.Remove(tempFile.Name())
+	// 3. Rebuild the multipart form so it can be forwarded to the scoring
+	//    service with the same field names the frontend sent.
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
 
-	if err := c.SaveUploadedFile(file, tempFile.Name()); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save uploaded file"})
+	if err := writer.WriteField("job_description", jdText); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to build scoring request"})
 		return
 	}
 
-	// 4. Extract text from the PDF
-	resumeText, err := extractTextFromPDF(tempFile.Name())
+	src, err := file.Open()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to parse PDF content"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to read uploaded file"})
+		return
+	}
+	defer src.Close()
+
+	part, err := writer.CreateFormFile("resume_file", file.Filename)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to build scoring request"})
+		return
+	}
+	if _, err := io.Copy(part, src); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to copy uploaded file"})
+		return
+	}
+	if err := writer.Close(); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to finalize scoring request"})
 		return
 	}
 
-	// 5. Parse the resume into specific sections
-	parsedResume := parseResumeSections(resumeText)
-
-	// 6. Return the final structured result
-	result := ParseResult{
-		Resume:         parsedResume,
-		JobDescription: parsedJD,
-	}
-
-	c.JSON(http.StatusOK, result)
-}
-
-func extractTextFromPDF(path string) (string, error) {
-	f, r, err := pdf.Open(path)
+	// 4. POST to the Flask scoring service.
+	req, err := http.NewRequest(http.MethodPost, scoreServiceURL(), &body)
 	if err != nil {
-		return "", err
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create scoring request"})
+		return
 	}
-	defer f.Close()
+	req.Header.Set("Content-Type", writer.FormDataContentType())
 
-	var buf bytes.Buffer
-	b, err := r.GetPlainText()
+	resp, err := httpClient.Do(req)
 	if err != nil {
-		return "", err
+		c.JSON(http.StatusBadGateway, gin.H{"error": "Scoring service unavailable: " + err.Error()})
+		return
 	}
-	buf.ReadFrom(b)
-	return buf.String(), nil
-}
+	defer resp.Body.Close()
 
-// parseResumeSections uses section headers to block out the text
-func parseResumeSections(text string) ParsedResume {
-	var parsed ParsedResume
-
-	// Extract Email using Regex
-	emailRegex := regexp.MustCompile(`[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}`)
-	if match := emailRegex.FindString(text); match != "" {
-		parsed.Email = match
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "Failed to read scoring service response"})
+		return
 	}
 
-	lines := strings.Split(text, "\n")
-	var currentSection string
-	var educationBuilder, skillsBuilder, expBuilder strings.Builder
-
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" {
-			continue
-		}
-
-		// Heuristic for Name: Grab the very first non-empty line
-		if parsed.Name == "" && !strings.Contains(trimmed, "PAGE") {
-			parsed.Name = trimmed
-			continue
-		}
-
-		// Identify Sections based on exact header matches
-		upperLine := strings.ToUpper(trimmed)
-		if upperLine == "EDUCATION" || upperLine == "TECHNICAL SKILLS" || upperLine == "EXPERIENCE" || upperLine == "PROJECTS" {
-			currentSection = upperLine
-			continue
-		}
-
-		// Route text to the appropriate builder based on the current section
-		switch currentSection {
-		case "EDUCATION":
-			educationBuilder.WriteString(trimmed + "\n")
-		case "TECHNICAL SKILLS":
-			skillsBuilder.WriteString(trimmed + "\n")
-		case "EXPERIENCE":
-			expBuilder.WriteString(trimmed + "\n")
-		}
+	// 5. Relay the scoring service's status code and JSON body back to the caller.
+	contentType := resp.Header.Get("Content-Type")
+	if contentType == "" {
+		contentType = "application/json"
 	}
-
-	parsed.Education = strings.TrimSpace(educationBuilder.String())
-	parsed.TechnicalSkills = strings.TrimSpace(skillsBuilder.String())
-	parsed.Experience = strings.TrimSpace(expBuilder.String())
-
-	return parsed
+	c.Data(resp.StatusCode, contentType, respBody)
 }
