@@ -13,6 +13,9 @@ from db import get_db
 
 
 MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6")
+# submit_scores repeats every section's full text across every pair, so the
+# final tool call is large. 8000 truncates it mid-call; give it real room.
+MAX_TOKENS = int(os.environ.get("ANTHROPIC_MAX_TOKENS", "16000"))
 
 SYSTEM_PROMPT = """You are the scoring engine for ResumeChecker. You receive one resume and one job description, and you produce matching scores between every resume section and every JD section.
  
@@ -58,7 +61,7 @@ def run_agent_turn(client, db, ctx, messages: list) -> str:
     while True:
         response = client.messages.create(
             model=MODEL,
-            max_tokens=8000,
+            max_tokens=MAX_TOKENS,
             system=SYSTEM_PROMPT,
             tools=TOOLS,
             messages=messages,
