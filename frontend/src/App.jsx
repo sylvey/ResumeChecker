@@ -12,11 +12,11 @@ function App() {
   const [resume, setResume] = useState(null);
   const [jd, setJd] = useState(null);
 
-  useEffect(() => {
-    if (jd) {
-      console.log("jd:", jd);
-    }
-  }, [jd]);
+  // useEffect(() => {
+  //   if (jd) {
+  //     console.log("jd:", jd);
+  //   }
+  // }, [jd]);
 
   const onSubmit = async (e) => {
     e.preventDefault();
@@ -33,7 +33,7 @@ function App() {
 
     // 1. Create a new FormData object
     const formData = new FormData();
-    
+
     // 2. Append your data exactly matching the keys the Go backend expects
     formData.append("resume_file", resume);
     formData.append("job_description", jd);
