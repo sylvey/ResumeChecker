@@ -52,13 +52,24 @@ Score each pair independently. Low scores are as valuable as high ones: they are
 Keep your final response short and concrete. No preamble."""
 
 
-def run_agent_turn(client, db, ctx, messages: list) -> str:
+def run_agent_turn(client, db, ctx, messages: list, on_progress=None) -> str:
     """Runs one user turn to completion: repeatedly calls the model, executing
     any tool calls, until it produces a final text response. Mutates
-    `messages` in place so history persists across turns."""
+    `messages` in place so history persists across turns.
 
-    
+    If given, on_progress(tool_name) is called right before each tool
+    dispatch, so a caller (e.g. a web server) can report which stage the
+    agent is in without needing to inspect the model's traffic itself. It is
+    also called with "thinking" right before every model call, since the
+    gap between the parse tools returning and submit_scores being dispatched
+    -- Claude reasoning over every pair -- has no tool call to hang a more
+    specific label on.
+    """
+
+
     while True:
+        if on_progress:
+            on_progress("thinking")
         response = client.messages.create(
             model=MODEL,
             max_tokens=MAX_TOKENS,
@@ -75,6 +86,8 @@ def run_agent_turn(client, db, ctx, messages: list) -> str:
         for block in response.content:
             if block.type != "tool_use":
                 continue
+            if on_progress:
+                on_progress(block.name)
             try:
                 result = dispatch(ctx, db, block.name, block.input)
                 content = json.dumps(result, default=str)
