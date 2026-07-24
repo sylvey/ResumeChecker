@@ -1,5 +1,6 @@
 Training_Data/
 __pycache__
+.DS_Store
 *.csv
 requirements_pip.txtUtils/Parsing/job_descriptions_tech.json
 *.json
