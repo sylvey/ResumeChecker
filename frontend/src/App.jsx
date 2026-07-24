@@ -1,22 +1,66 @@
-import { useState, useEffect } from "react";
-import reactLogo from "./assets/react.svg";
-import viteLogo from "./assets/vite.svg";
-import heroImg from "./assets/hero.png";
+import { useState, useEffect, useRef } from "react";
 import "./App.css";
-import { TextField, Box, Button } from "@mui/material";
-import pkg from "file-uploader-js";
-const FileUploader = pkg.default;
+import {
+  Container,
+  Paper,
+  Stack,
+  Box,
+  Typography,
+  TextField,
+  Button,
+  Chip,
+  LinearProgress,
+  Alert,
+  Divider,
+  CircularProgress,
+} from "@mui/material";
 import axios from "axios";
+
+const POLL_INTERVAL_MS = 2000;
+
+function scoreColor(score) {
+  if (score >= 7) return "success";
+  if (score >= 4) return "warning";
+  return "error";
+}
 
 function App() {
   const [resume, setResume] = useState(null);
-  const [jd, setJd] = useState(null);
+  const [jd, setJd] = useState("");
+  const [status, setStatus] = useState(null); // null | "running" | "done" | "error"
+  const [stage, setStage] = useState("");
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState(null);
+  const pollRef = useRef(null);
 
-  // useEffect(() => {
-  //   if (jd) {
-  //     console.log("jd:", jd);
-  //   }
-  // }, [jd]);
+  // Stop polling if the component unmounts mid-job.
+  useEffect(() => {
+    return () => clearInterval(pollRef.current);
+  }, []);
+
+  const pollStatus = (jobId) => {
+    pollRef.current = setInterval(async () => {
+      try {
+        const res = await axios.get(`/api/parse/${jobId}/status`);
+        const job = res.data;
+        setStage(job.stage || "");
+
+        if (job.status === "done") {
+          clearInterval(pollRef.current);
+          setStatus("done");
+          setResult(job);
+        } else if (job.status === "error") {
+          clearInterval(pollRef.current);
+          setStatus("error");
+          setError(job.error || "Scoring failed.");
+        }
+      } catch (err) {
+        clearInterval(pollRef.current);
+        setStatus("error");
+        setError(err.message);
+      }
+    }, POLL_INTERVAL_MS);
+  };
 
   const onSubmit = async (e) => {
     e.preventDefault();
@@ -24,101 +68,169 @@ function App() {
       alert("Please upload your resume.");
       return;
     }
-    if (!jd) {
+    if (!jd.trim()) {
       alert("Please enter the job description.");
       return;
     }
-    console.log("Resume:", resume);
-    console.log("Job Description:", jd);
 
-    // 1. Create a new FormData object
     const formData = new FormData();
-
-    // 2. Append your data exactly matching the keys the Go backend expects
     formData.append("resume_file", resume);
     formData.append("job_description", jd);
 
+    setStatus("running");
+    setStage("Starting...");
+    setResult(null);
+    setError(null);
+
     try {
-      // 3. Send the formData object directly instead of a generic {} object
       const res = await axios.post("/api/parse", formData);
-      console.log(res.data);
-    } catch (error) {
-      console.error("Error uploading data:", error);
+      const jobId = res.data.job_id;
+      if (!jobId) {
+        throw new Error("No job_id returned from server.");
+      }
+      pollStatus(jobId);
+    } catch (err) {
+      console.error("Error uploading data:", err);
+      setStatus("error");
+      setError(err.message);
     }
   };
 
+  const isRunning = status === "running";
+
   return (
-    <>
-      <Box sx={{ width: "100%" }}>
-        <h3>Upload Your Resume</h3>
-        {resume ? (
-          <div style={{ marginTop: "20px" }}>
-            <p>Selected Resume:</p>
-            <p>
-              {resume.name} {(resume.size / 1024).toFixed(2)} KB
-            </p>
-          </div>
-        ) : (
-          <FileUploader
-            accept={[".pdf"]}
-            uploadedFileCallback={(file) => console.log(file)}
-            renderInput={({ onChange, accept }) => (
-              <div>
-                <button
-                  onClick={() => document.getElementById("fileInput").click()}
-                  style={{
-                    flex: "1",
-                    padding: "10px 20px",
-                    background: "#77b2f11b",
-                    color: "black",
-                    border: "none",
-                    borderRadius: "5px",
-                    cursor: "pointer",
+    <Container maxWidth="sm" sx={{ textAlign: "left", py: 6 }}>
+      <Stack spacing={0.5} sx={{ mb: 4 }}>
+        <Typography variant="h4" sx={{ color: "var(--text-h)", fontWeight: 600 }}>
+          ResumeChecker
+        </Typography>
+        <Typography variant="body2" sx={{ color: "var(--text)" }}>
+          Upload a resume and a job description to see how well they match.
+        </Typography>
+      </Stack>
+
+      <Paper variant="outlined" sx={{ p: 4, borderRadius: 3 }}>
+        <Stack spacing={3}>
+          <Box>
+            <Typography variant="subtitle2" sx={{ mb: 1, color: "var(--text-h)" }}>
+              Resume
+            </Typography>
+            {resume ? (
+              <Chip
+                label={`${resume.name} · ${(resume.size / 1024).toFixed(1)} KB`}
+                onDelete={isRunning ? undefined : () => setResume(null)}
+                disabled={isRunning}
+                sx={{ maxWidth: "100%" }}
+              />
+            ) : (
+              <Button variant="outlined" component="label" disabled={isRunning}>
+                Choose PDF
+                <input
+                  type="file"
+                  accept=".pdf"
+                  hidden
+                  onChange={(e) => setResume(e.target.files[0])}
+                />
+              </Button>
+            )}
+          </Box>
+
+          <TextField
+            label="Job Description"
+            placeholder="Paste the job description here..."
+            multiline
+            minRows={6}
+            fullWidth
+            value={jd}
+            disabled={isRunning}
+            onChange={(e) => setJd(e.target.value)}
+          />
+
+          <Button
+            variant="contained"
+            size="large"
+            disabled={isRunning}
+            onClick={onSubmit}
+            startIcon={isRunning ? <CircularProgress size={16} color="inherit" /> : null}
+            sx={{
+              background: "var(--accent)",
+              "&:hover": { background: "var(--accent)", opacity: 0.9 },
+            }}
+          >
+            {isRunning ? "Scoring..." : "Check Match"}
+          </Button>
+
+          {isRunning && (
+            <Box>
+              <LinearProgress />
+              <Typography variant="body2" sx={{ mt: 1, color: "var(--text)" }}>
+                {stage || "Working..."}
+              </Typography>
+            </Box>
+          )}
+
+          {status === "error" && <Alert severity="error">{error}</Alert>}
+        </Stack>
+      </Paper>
+
+      {status === "done" && result && (
+        <Paper variant="outlined" sx={{ p: 4, borderRadius: 3, mt: 3 }}>
+          <Stack spacing={2}>
+            <Stack direction="row" alignItems="baseline" spacing={1.5}>
+              <Typography
+                variant="h3"
+                sx={{ fontWeight: 700, color: `${scoreColor(result.overall_score)}.main` }}
+              >
+                {result.overall_score.toFixed(1)}
+              </Typography>
+              <Typography variant="body2" sx={{ color: "var(--text)" }}>
+                / 10 overall match
+              </Typography>
+            </Stack>
+
+            {result.reply && (
+              <Typography variant="body2" sx={{ color: "var(--text)" }}>
+                {result.reply}
+              </Typography>
+            )}
+
+            <Divider />
+
+            <Stack spacing={1.5}>
+              {result.pairs?.map((pair, i) => (
+                <Box
+                  key={i}
+                  sx={{
+                    border: "1px solid var(--border)",
+                    borderRadius: 2,
+                    p: 2,
                   }}
                 >
-                  📁 Upload your Resume
-                </button>
-                <input
-                  id="fileInput"
-                  type="file"
-                  accept={accept}
-                  onChange={(e) => {
-                    setResume(e.target.files[0]);
-                  }}
-                  style={{ display: "none" }}
-                />
-              </div>
-            )}
-          />
-        )}
-      </Box>
-      <Box sx={{ width: "100%", marginTop: "20px" }}>
-        <h3>Job Description</h3>
-        <TextField
-          label="Job Description"
-          multiline
-          rows={4}
-          onChange={(e) => {
-            setJd(e.target.value);
-          }}
-          variant="outlined"
-          fullWidth
-          style={{ width: "70%" }}
-        />
-      </Box>
-      <Box sx={{ width: "100%", marginTop: "20px" }}>
-        <Button
-          sx={{
-            width: "90px",
-            background: "hsl(210, 100%, 45%)",
-            color: "white",
-          }}
-          onClick={onSubmit}
-        >
-          Submit
-        </Button>
-      </Box>
-    </>
+                  <Stack
+                    direction="row"
+                    justifyContent="space-between"
+                    alignItems="center"
+                    spacing={2}
+                  >
+                    <Typography variant="subtitle2" sx={{ color: "var(--text-h)" }}>
+                      {pair.resume_section_name} × {pair.jd_section_name}
+                    </Typography>
+                    <Chip
+                      label={pair.matching_score}
+                      color={scoreColor(pair.matching_score)}
+                      size="small"
+                    />
+                  </Stack>
+                  <Typography variant="body2" sx={{ mt: 0.5, color: "var(--text)" }}>
+                    {pair.rationale}
+                  </Typography>
+                </Box>
+              ))}
+            </Stack>
+          </Stack>
+        </Paper>
+      )}
+    </Container>
   );
 }
 
