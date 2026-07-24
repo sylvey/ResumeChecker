@@ -15,6 +15,7 @@ import {
   CircularProgress,
 } from "@mui/material";
 import axios from "axios";
+import ReactMarkdown from "react-markdown";
 
 const POLL_INTERVAL_MS = 2000;
 
@@ -189,9 +190,30 @@ function App() {
             </Stack>
 
             {result.reply && (
-              <Typography variant="body2" sx={{ color: "var(--text)" }}>
-                {result.reply}
-              </Typography>
+              <Box
+                sx={{
+                  color: "var(--text)",
+                  fontSize: "0.875rem",
+                  lineHeight: 1.6,
+                  "& h1, & h2, & h3": {
+                    color: "var(--text-h)",
+                    fontSize: "1rem",
+                    fontWeight: 600,
+                    margin: "12px 0 4px",
+                  },
+                  "& p": { margin: "8px 0" },
+                  "& ul": { margin: "4px 0", paddingLeft: "20px" },
+                  "& li": { margin: "4px 0" },
+                  "& strong": { color: "var(--text-h)" },
+                  "& hr": {
+                    border: "none",
+                    borderTop: "1px solid var(--border)",
+                    margin: "12px 0",
+                  },
+                }}
+              >
+                <ReactMarkdown>{result.reply}</ReactMarkdown>
+              </Box>
             )}
 
             <Divider />
