@@ -40,7 +40,7 @@ function App() {
 
     try {
       // 3. Send the formData object directly instead of a generic {} object
-      const res = await axios.post("http://localhost:8080/api/parse", formData);
+      const res = await axios.post("/api/parse", formData);
       console.log(res.data);
     } catch (error) {
       console.error("Error uploading data:", error);
