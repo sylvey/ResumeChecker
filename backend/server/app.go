@@ -26,5 +26,7 @@ func main() {
 
 	r.POST("/api/parse", Resume.ParseHandler)
 
+	r.GET("/api/parse/:jobId/status", Resume.ScoreStatusHandler)
+
 	r.Run(":8080")
 }

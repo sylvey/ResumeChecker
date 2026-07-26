@@ -12,13 +12,13 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// scoreServiceURL is where the Python Flask agent pipeline listens.
+// scoreServiceBaseURL is where the Python Flask agent pipeline listens.
 // Override with the SCORE_SERVICE_URL env var if it runs elsewhere.
-func scoreServiceURL() string {
+func scoreServiceBaseURL() string {
 	if url := os.Getenv("SCORE_SERVICE_URL"); url != "" {
 		return url
 	}
-	return "http://localhost:5001/score"
+	return "http://localhost:5001"
 }
 
 // The agent runs a multi-step Claude tool loop that can take tens of seconds,
@@ -78,7 +78,7 @@ var ParseHandler = func(c *gin.Context) {
 	}
 
 	// 4. POST to the Flask scoring service.
-	req, err := http.NewRequest(http.MethodPost, scoreServiceURL(), &body)
+	req, err := http.NewRequest(http.MethodPost, scoreServiceBaseURL()+"/score", &body)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create scoring request"})
 		return
@@ -99,6 +99,31 @@ var ParseHandler = func(c *gin.Context) {
 	}
 
 	// 5. Relay the scoring service's status code and JSON body back to the caller.
+	contentType := resp.Header.Get("Content-Type")
+	if contentType == "" {
+		contentType = "application/json"
+	}
+	c.Data(resp.StatusCode, contentType, respBody)
+}
+
+// ScoreStatusHandler polls the Python scoring service for a job's progress
+// and relays its response back to the caller.
+var ScoreStatusHandler = func(c *gin.Context) {
+	jobID := c.Param("jobId")
+
+	resp, err := httpClient.Get(scoreServiceBaseURL() + "/score/" + jobID + "/status")
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "Scoring service unavailable: " + err.Error()})
+		return
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "Failed to read scoring service response"})
+		return
+	}
+
 	contentType := resp.Header.Get("Content-Type")
 	if contentType == "" {
 		contentType = "application/json"
