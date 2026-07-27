@@ -1,3 +1,4 @@
 server
 *.exe
 *.out
+app-go
