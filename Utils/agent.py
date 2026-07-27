@@ -60,16 +60,20 @@ def run_agent_turn(client, db, ctx, messages: list, on_progress=None) -> str:
     If given, on_progress(tool_name) is called right before each tool
     dispatch, so a caller (e.g. a web server) can report which stage the
     agent is in without needing to inspect the model's traffic itself. It is
-    also called with "thinking" right before every model call, since the
-    gap between the parse tools returning and submit_scores being dispatched
-    -- Claude reasoning over every pair -- has no tool call to hang a more
-    specific label on.
+    also called right before every model call: "thinking" for the gap
+    between the parse tools returning and submit_scores being dispatched --
+    Claude reasoning over every pair, with no tool call to hang a more
+    specific label on -- and "finishing" for the final call after
+    submit_scores, which only writes the closing summary and would
+    otherwise misleadingly report "thinking" again for a stage that's
+    already done.
     """
 
+    called_tools = set()
 
     while True:
         if on_progress:
-            on_progress("thinking")
+            on_progress("finishing" if "submit_scores" in called_tools else "thinking")
         response = client.messages.create(
             model=MODEL,
             max_tokens=MAX_TOKENS,
@@ -88,6 +92,7 @@ def run_agent_turn(client, db, ctx, messages: list, on_progress=None) -> str:
                 continue
             if on_progress:
                 on_progress(block.name)
+            called_tools.add(block.name)
             try:
                 result = dispatch(ctx, db, block.name, block.input)
                 content = json.dumps(result, default=str)
