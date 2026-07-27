@@ -78,7 +78,7 @@ export default function App() {
       const file = e.dataTransfer.files[0];
       if (file) handleFileSelect(file);
     },
-    [handleFileSelect]
+    [handleFileSelect],
   );
 
   const pollStatus = (jobId) => {
@@ -176,7 +176,7 @@ export default function App() {
                 <FileText className="w-3.5 h-3.5 text-white" />
               </div>
               <span className="font-semibold text-sm tracking-tight">
-                Resumate
+                PaReJob
               </span>
             </div>
             <button
