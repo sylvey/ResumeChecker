@@ -48,6 +48,7 @@ STAGE_LABELS = {
     "parse_jd": "Parsing job description...",
     "submit_scores": "Saving scores...",
     "thinking": "Scoring sections...",
+    "finishing": "Finishing up...",
 }
 
 
