@@ -14,11 +14,13 @@ import (
 
 // scoreServiceBaseURL is where the Python Flask agent pipeline listens.
 // Override with the SCORE_SERVICE_URL env var if it runs elsewhere.
+// Uses 127.0.0.1 rather than "localhost" so it can't accidentally resolve to
+// some other IPv6 listener squatting on the same port (e.g. Docker Desktop).
 func scoreServiceBaseURL() string {
 	if url := os.Getenv("SCORE_SERVICE_URL"); url != "" {
 		return url
 	}
-	return "http://localhost:5001"
+	return "http://127.0.0.1:5001"
 }
 
 // The agent runs a multi-step Claude tool loop that can take tens of seconds,
