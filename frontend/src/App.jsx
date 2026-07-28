@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import axios from "axios";
 import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 const POLL_INTERVAL_MS = 2000;
 
@@ -416,8 +417,10 @@ export default function App() {
                   <p className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground mb-2">
                     Summary
                   </p>
-                  <div className="text-sm leading-relaxed text-foreground [&_p]:mb-2 [&_ul]:pl-4 [&_li]:mb-1 [&_strong]:font-semibold">
-                    <ReactMarkdown>{result.reply}</ReactMarkdown>
+                  <div className="text-sm leading-relaxed text-foreground [&_p]:mb-2 [&_ul]:pl-4 [&_li]:mb-1 [&_strong]:font-semibold [&_table]:w-full [&_table]:border-collapse [&_table]:my-2 [&_th]:text-left [&_th]:border-b [&_th]:border-border [&_th]:pb-1 [&_th]:pr-3 [&_td]:border-b [&_td]:border-border/60 [&_td]:py-1.5 [&_td]:pr-3 [&_td]:align-top">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                      {result.reply}
+                    </ReactMarkdown>
                   </div>
                 </div>
               )}
