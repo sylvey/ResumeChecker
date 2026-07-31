@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import axios from "axios";
 import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 const POLL_INTERVAL_MS = 2000;
 
@@ -87,11 +88,14 @@ export default function App() {
         const res = await axios.get(`/api/parse/${jobId}/status`);
         const job = res.data;
         setStage(job.stage || "");
+        // job.pairs grows as each JD section lands, even before the job is
+        // fully done -- keep result in sync every poll so the breakdown
+        // can render progressively instead of only appearing at the end.
+        setResult(job);
 
         if (job.status === "done") {
           clearInterval(pollRef.current);
           setStatus("done");
-          setResult(job);
         } else if (job.status === "error") {
           clearInterval(pollRef.current);
           setStatus("error");
@@ -389,89 +393,104 @@ export default function App() {
             </div>
           )}
 
-          {/* Results */}
-          {status === "done" && result && (
-            <div className="space-y-5">
-              {/* Overall score hero */}
-              <div
-                className={`rounded-xl border px-6 py-8 text-center ${overallColors.border} ${overallColors.bg}`}
-              >
+          {/* Results -- score hero/summary only once done, but the section
+              breakdown renders progressively as pairs arrive, even while
+              status is still "running" */}
+          <div className="space-y-5">
+            {status === "done" && result && (
+              <>
+                {/* Overall score hero */}
                 <div
-                  className={`font-mono-data text-6xl font-bold tracking-tight leading-none ${overallColors.text}`}
+                  className={`rounded-xl border px-6 py-8 text-center ${overallColors.border} ${overallColors.bg}`}
                 >
-                  {result.overall_score.toFixed(1)}
-                  <span className="text-2xl font-normal text-muted-foreground">
-                    {" "}
-                    / 10
-                  </span>
+                  <div
+                    className={`font-mono-data text-6xl font-bold tracking-tight leading-none ${overallColors.text}`}
+                  >
+                    {result.overall_score.toFixed(1)}
+                    <span className="text-2xl font-normal text-muted-foreground">
+                      {" "}
+                      / 10
+                    </span>
+                  </div>
+                  <p className="text-xs uppercase tracking-widest font-semibold text-muted-foreground mt-3">
+                    Overall Match Score
+                  </p>
                 </div>
-                <p className="text-xs uppercase tracking-widest font-semibold text-muted-foreground mt-3">
-                  Overall Match Score
+
+                {/* AI Summary */}
+                {result.reply && (
+                  <div className="rounded-lg border border-border bg-card px-4 py-4">
+                    <p className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground mb-2">
+                      Summary
+                    </p>
+                    <div className="text-sm leading-relaxed text-foreground [&_p]:mb-2 [&_ul]:pl-4 [&_li]:mb-1 [&_strong]:font-semibold [&_table]:w-full [&_table]:border-collapse [&_table]:my-2 [&_th]:text-left [&_th]:border-b [&_th]:border-border [&_th]:pb-1 [&_th]:pr-3 [&_td]:border-b [&_td]:border-border/60 [&_td]:py-1.5 [&_td]:pr-3 [&_td]:align-top">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                        {result.reply}
+                      </ReactMarkdown>
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+
+            {/* Section breakdown -- grows on its own as each JD section's
+                pairs land, independent of whether the job has finished */}
+            {result?.pairs?.length > 0 && (
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground mb-3">
+                  Section Breakdown
+                  {status === "running" && (
+                    <span className="normal-case tracking-normal font-normal text-muted-foreground/70">
+                      {" "}
+                      -- updating as scoring continues
+                    </span>
+                  )}
                 </p>
-              </div>
-
-              {/* AI Summary */}
-              {result.reply && (
-                <div className="rounded-lg border border-border bg-card px-4 py-4">
-                  <p className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground mb-2">
-                    Summary
-                  </p>
-                  <div className="text-sm leading-relaxed text-foreground [&_p]:mb-2 [&_ul]:pl-4 [&_li]:mb-1 [&_strong]:font-semibold">
-                    <ReactMarkdown>{result.reply}</ReactMarkdown>
-                  </div>
-                </div>
-              )}
-
-              {/* Section breakdown */}
-              {result.pairs?.length > 0 && (
-                <div>
-                  <p className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground mb-3">
-                    Section Breakdown
-                  </p>
-                  <div className="space-y-4">
-                    {Object.entries(groupedPairs).map(([section, pairs]) => (
-                      <div key={section}>
-                        <p className="text-xs font-semibold text-foreground/70 mb-1.5 px-0.5">
-                          {section}
-                        </p>
-                        <div className="space-y-1.5">
-                          {pairs.map((pair, i) => {
-                            const c = scoreColor(pair.matching_score);
-                            return (
+                <div className="space-y-4">
+                  {Object.entries(groupedPairs).map(([section, pairs]) => (
+                    <div key={section}>
+                      <p className="text-xs font-semibold text-foreground/70 mb-1.5 px-0.5">
+                        {section}
+                      </p>
+                      <div className="space-y-1.5">
+                        {pairs.map((pair, i) => {
+                          const c = scoreColor(pair.matching_score);
+                          return (
+                            <div
+                              key={i}
+                              className="flex items-start gap-3 rounded-lg border border-border bg-card px-3.5 py-3 hover:border-[#aa3bff]/30 transition-colors"
+                            >
                               <div
-                                key={i}
-                                className="flex items-start gap-3 rounded-lg border border-border bg-card px-3.5 py-3 hover:border-[#aa3bff]/30 transition-colors"
+                                className={`shrink-0 font-mono-data text-xs font-bold px-2 py-0.5 rounded border mt-0.5 ${c.text} ${c.bg} ${c.border}`}
                               >
-                                <div
-                                  className={`shrink-0 font-mono-data text-xs font-bold px-2 py-0.5 rounded border mt-0.5 ${c.text} ${c.bg} ${c.border}`}
-                                >
-                                  {pair.matching_score.toFixed(1)}
-                                </div>
-                                <div className="flex-1 min-w-0">
-                                  <p className="text-xs font-medium text-foreground mb-0.5">
-                                    <span>{pair.resume_section_name}</span>
-                                    <span className="text-muted-foreground mx-1.5">
-                                      ×
-                                    </span>
-                                    <span className="text-muted-foreground">
-                                      {pair.jd_section_name}
-                                    </span>
-                                  </p>
-                                  <p className="text-xs text-muted-foreground leading-relaxed">
-                                    {pair.rationale}
-                                  </p>
-                                </div>
+                                {pair.matching_score.toFixed(1)}
                               </div>
-                            );
-                          })}
-                        </div>
+                              <div className="flex-1 min-w-0">
+                                <p className="text-xs font-medium text-foreground mb-0.5">
+                                  <span>{pair.resume_section_name}</span>
+                                  <span className="text-muted-foreground mx-1.5">
+                                    ×
+                                  </span>
+                                  <span className="text-muted-foreground">
+                                    {pair.jd_section_name}
+                                  </span>
+                                </p>
+                                <p className="text-xs text-muted-foreground leading-relaxed">
+                                  {pair.rationale}
+                                </p>
+                              </div>
+                            </div>
+                          );
+                        })}
                       </div>
-                    ))}
-                  </div>
+                    </div>
+                  ))}
                 </div>
-              )}
+              </div>
+            )}
 
-              {/* Score another */}
+            {/* Score another */}
+            {status === "done" && result && (
               <button
                 onClick={handleReset}
                 className="w-full h-10 flex items-center justify-center gap-2 rounded-lg text-sm font-medium border border-border text-muted-foreground hover:text-foreground hover:border-[#aa3bff]/40 hover:bg-muted/30 transition-all"
@@ -479,8 +498,8 @@ export default function App() {
                 <RotateCcw className="w-3.5 h-3.5" />
                 Score another resume
               </button>
-            </div>
-          )}
+            )}
+          </div>
         </main>
       </div>
     </>

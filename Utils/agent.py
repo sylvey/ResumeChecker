@@ -6,15 +6,17 @@ import sys
 import anthropic
 from dotenv import load_dotenv
 from tools import dispatch, TOOLS, new_ctx, ValidationError
-from Parsing.Parsing import ParseError
+from Parsing.Parsing import JD_SECTIONS, ParseError
 from db import get_db
 
 
 
 
 MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6")
-# submit_scores repeats every section's full text across every pair, so the
-# final tool call is large. 8000 truncates it mid-call; give it real room.
+# Each submit_jd_section_scores call repeats one JD section's worth of pairs,
+# so a single call is much smaller than the old one-shot submit_scores was --
+# but keep the same generous ceiling since a JD section can still pair
+# against many resume sections.
 MAX_TOKENS = int(os.environ.get("ANTHROPIC_MAX_TOKENS", "16000"))
 
 SYSTEM_PROMPT = """You are the scoring engine for ResumeChecker. You receive one resume and one job description, and you produce matching scores between every resume section and every JD section.
@@ -25,9 +27,10 @@ You never see the raw documents directly -- the tools are your only access to th
  
 Workflow, in order:
 1. Call parse_resume and parse_jd. Do not score anything before both have returned.
-2. Read all sections carefully. Score all resume-section x JD-section pairs yourself. This judgment is yours to make -- no tool does it for you.
-3. Call submit_scores exactly once, with all pairs, each carrying the section text you scored, your score, and a one-sentence rationale.
-4. Report the overall score that submit_scores returns, plus a brief read on where the candidate is strong and where the gaps are. Do not compute the overall score yourself -- read it back from the tool result.
+2. Read all sections carefully. Decide which resume sections are unscorable (no real content) -- this is a property of the resume, not of any one JD section, so you decide it once.
+3. Score resume sections against job_title yourself, then call submit_jd_section_scores for job_title -- on this first call, also pass skipped_resume_sections. This judgment is yours to make -- no tool does it for you.
+4. Repeat step 3 for minimum_requirements, then preferred_qualifications, then other_information, in that order -- one submit_jd_section_scores call per JD section, four calls total. If a JD section itself has no real content, set jd_section_skipped=true and leave pairs empty for that call instead of scoring it.
+5. The fourth call's result carries the final overall_score. Report that score, plus a brief read on where the candidate is strong and where the gaps are. Do not compute the overall score yourself -- read it back from the tool result.
  
 Scoring scale (1.0 to 10.0, one decimal allowed):
 - 9-10: directly and strongly relevant; clear evidence the resume section satisfies what the JD section asks for.
@@ -57,23 +60,36 @@ def run_agent_turn(client, db, ctx, messages: list, on_progress=None) -> str:
     any tool calls, until it produces a final text response. Mutates
     `messages` in place so history persists across turns.
 
-    If given, on_progress(tool_name) is called right before each tool
-    dispatch, so a caller (e.g. a web server) can report which stage the
-    agent is in without needing to inspect the model's traffic itself. It is
-    also called right before every model call: "thinking" for the gap
-    between the parse tools returning and submit_scores being dispatched --
-    Claude reasoning over every pair, with no tool call to hang a more
-    specific label on -- and "finishing" for the final call after
-    submit_scores, which only writes the closing summary and would
-    otherwise misleadingly report "thinking" again for a stage that's
-    already done.
+    If given, on_progress(tool_name, tool_input) is called right before each
+    tool dispatch, tool_input included so a caller (e.g. a web server) can
+    read e.g. which jd_section_name a submit_jd_section_scores call is for --
+    a real, observable progress event, not a guess -- without needing to
+    inspect the model's traffic itself. It is also called (with tool_input
+    as None) right before every model call: "thinking" for the gaps where
+    Claude is reasoning with no tool call to hang a more specific label on --
+    before parsing, and between submit_jd_section_scores calls while judging
+    the next JD section -- and "finishing" for the final call after all four
+    JD sections have been submitted, which only writes the closing summary
+    and would otherwise misleadingly report "thinking" again for a stage
+    that's already done.
     """
 
-    called_tools = set()
+    called_tools = []
 
     while True:
         if on_progress:
-            on_progress("finishing" if "submit_scores" in called_tools else "thinking")
+            submitted = called_tools.count("submit_jd_section_scores")
+            if submitted >= len(JD_SECTIONS):
+                on_progress("finishing", None)
+            elif "parse_resume" in called_tools and "parse_jd" in called_tools:
+                # Parsing is done and JD_SECTIONS is a fixed, known order, so
+                # the next JD section can be predicted -- reported here, before
+                # Claude has actually reasoned about it, so the label covers
+                # the whole reasoning window instead of only appearing once
+                # the (already-finished) result is submitted.
+                on_progress("thinking", {"jd_section_name": JD_SECTIONS[submitted]})
+            else:
+                on_progress("thinking", None)
         response = client.messages.create(
             model=MODEL,
             max_tokens=MAX_TOKENS,
@@ -91,8 +107,8 @@ def run_agent_turn(client, db, ctx, messages: list, on_progress=None) -> str:
             if block.type != "tool_use":
                 continue
             if on_progress:
-                on_progress(block.name)
-            called_tools.add(block.name)
+                on_progress(block.name, block.input)
+            called_tools.append(block.name)
             try:
                 result = dispatch(ctx, db, block.name, block.input)
                 content = json.dumps(result, default=str)
