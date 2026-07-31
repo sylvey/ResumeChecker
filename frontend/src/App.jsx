@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { Menu, MenuItem, Divider } from "@mui/material";
 import {
   Upload,
   X,
@@ -11,6 +12,7 @@ import {
 import axios from "axios";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import Login from "./Login";
 
 const POLL_INTERVAL_MS = 2000;
 
@@ -49,6 +51,10 @@ export default function App() {
   const [stage, setStage] = useState("");
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
+  const [user, setUser] = useState(null);
+  const [loginOpen, setLoginOpen] = useState(false);
+  const [anchorEl, setAnchorEl] = useState(null);
+  const menuOpen = Boolean(anchorEl);
 
   const fileInputRef = useRef(null);
   const pollRef = useRef(null);
@@ -64,6 +70,13 @@ export default function App() {
 
   useEffect(() => {
     return () => clearInterval(pollRef.current);
+  }, []);
+
+  useEffect(() => {
+    axios
+      .get("/api/auth/me", { withCredentials: true })
+      .then(({ data }) => setUser(data.user))
+      .catch(() => setUser(null));
   }, []);
 
   const handleFileSelect = useCallback((file) => {
@@ -140,6 +153,17 @@ export default function App() {
     setError(null);
   };
 
+  const handleLogout = async () => {
+    try {
+      await axios.post("/api/auth/logout", {}, { withCredentials: true });
+    } catch (err) {
+      console.error("Logout failed", err);
+    } finally {
+      setUser(null);
+      setAnchorEl(null);
+    }
+  };
+
   const isRunning = status === "running";
   const canSubmit = resumeFile !== null && jdText.trim().length > 0;
   const overallColors = result ? scoreColor(result.overall_score) : null;
@@ -151,6 +175,63 @@ export default function App() {
       acc[section].push(pair);
       return acc;
     }, {}) ?? {};
+  const developingTag = (
+    <span className="text-xs text-muted-foreground ml-1">(Developing)</span>
+  );
+  const loginButtons = (
+    <>
+      {user ? (
+        <button
+          onClick={(e) => setAnchorEl(e.currentTarget)}
+          className="flex items-center gap-2 rounded-full hover:opacity-80 transition-opacity"
+        >
+          <img
+            src={user.picture}
+            className="w-7 h-7 rounded-full"
+            alt={user.name}
+            referrerPolicy="no-referrer"
+          />
+          <span className="text-sm">{user.name}</span>
+          <Menu
+            anchorEl={anchorEl}
+            open={menuOpen}
+            onClose={() => setAnchorEl(null)}
+            anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
+            transformOrigin={{ vertical: "top", horizontal: "right" }}
+          >
+            <MenuItem onClick={() => setAnchorEl(null)}>
+              Profile {developingTag}{" "}
+            </MenuItem>
+            <MenuItem onClick={() => setAnchorEl(null)}>
+              Saved Resumes{developingTag}
+            </MenuItem>
+            <MenuItem onClick={() => setAnchorEl(null)}>
+              Saved Jobs {developingTag}
+            </MenuItem>
+            <Divider />
+            <MenuItem onClick={handleLogout}>Logout</MenuItem>
+          </Menu>
+        </button>
+      ) : (
+        <button
+          onClick={() => setLoginOpen(true)}
+          className="h-8 px-3 flex items-center justify-center rounded-md text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+        >
+          Login
+        </button>
+      )}
+    </>
+  );
+
+  const setDarkModeButtons = (
+    <button
+      onClick={() => setIsDark((d) => !d)}
+      className="w-8 h-8 flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+      aria-label="Toggle dark mode"
+    >
+      {isDark ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+    </button>
+  );
 
   return (
     <>
@@ -183,20 +264,19 @@ export default function App() {
                 PaReJob
               </span>
             </div>
-            <button
-              onClick={() => setIsDark((d) => !d)}
-              className="w-8 h-8 flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-              aria-label="Toggle dark mode"
-            >
-              {isDark ? (
-                <Sun className="w-4 h-4" />
-              ) : (
-                <Moon className="w-4 h-4" />
-              )}
-            </button>
+            <div className="flex items-center gap-2">
+              {setDarkModeButtons}
+              {loginButtons}
+            </div>
           </div>
         </header>
-
+        <Login
+          open={loginOpen}
+          onClose={() => setLoginOpen(false)}
+          onLoginSuccess={(user) => {
+            setUser(user);
+          }}
+        />
         <main className="max-w-2xl mx-auto px-5 py-10 pb-20">
           {/* Page headline */}
           <div className="mb-9 text-center">

@@ -24,4 +24,6 @@ dist-ssr
 *.sln
 *.sw?
 
+ubuntu@3.137.206.242/
+.env
 
