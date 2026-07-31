@@ -2,3 +2,4 @@ server
 *.exe
 *.out
 app-go
+.env
