@@ -46,16 +46,40 @@ JOBS_LOCK = threading.Lock()
 STAGE_LABELS = {
     "parse_resume": "Parsing resume...",
     "parse_jd": "Parsing job description...",
-    "submit_scores": "Saving scores...",
     "thinking": "Scoring sections...",
     "finishing": "Finishing up...",
 }
 
+JD_SECTION_LABELS = {
+    "job_title": "job title",
+    "minimum_requirements": "minimum requirements",
+    "preferred_qualifications": "preferred qualifications",
+    "other_information": "other information",
+}
+
 
 def _run_job(job_id, resume_path, jd_path):
-    def on_progress(tool_name):
+    def on_progress(tool_name, tool_input):
+        # Both submit_jd_section_scores (the real submission, once reasoning
+        # is already done) and a predicted "thinking" call (sent before
+        # reasoning starts, since JD_SECTIONS' fixed order makes the next
+        # section knowable in advance) carry jd_section_name -- using the
+        # same label for both means the stage covers the whole reasoning
+        # window for that section, not just the moment it gets submitted.
+        if tool_input and tool_input.get("jd_section_name"):
+            jd_section = tool_input["jd_section_name"]
+            label = JD_SECTION_LABELS.get(jd_section, jd_section)
+            stage = f"Scoring against: {label}..."
+        else:
+            stage = STAGE_LABELS.get(tool_name, tool_name)
         with JOBS_LOCK:
-            JOBS[job_id]["stage"] = STAGE_LABELS.get(tool_name, tool_name)
+            JOBS[job_id]["stage"] = stage
+            # Snapshot whatever's been submitted so far -- ctx["all_pairs"]
+            # grows as each JD section lands, so the frontend can render
+            # results gradually instead of waiting for the whole job to
+            # finish. ctx is assigned below before this closure ever
+            # actually runs, so it's safe to read here.
+            JOBS[job_id]["pairs"] = list(ctx["all_pairs"])
 
     try:
         jd_text = open(jd_path, encoding="utf-8").read()
