@@ -18,6 +18,7 @@ import uuid
 import anthropic
 from dotenv import load_dotenv
 from flask import Flask, jsonify, request
+from datetime import datetime, timezone
 
 from agent import run_agent_turn
 from tools import new_ctx
@@ -58,7 +59,7 @@ JD_SECTION_LABELS = {
 }
 
 
-def _run_job(job_id, resume_path, jd_path):
+def _run_job(job_id, resume_id, resume_path, jd_id, jd_text):
     def on_progress(tool_name, tool_input):
         # Both submit_jd_section_scores (the real submission, once reasoning
         # is already done) and a predicted "thinking" call (sent before
@@ -82,13 +83,16 @@ def _run_job(job_id, resume_path, jd_path):
             JOBS[job_id]["pairs"] = list(ctx["all_pairs"])
 
     try:
-        jd_text = open(jd_path, encoding="utf-8").read()
         messages = [{
             "role": "user",
             "content": (
                 f"Score this resume against this job description.\n\n"
+                f"resume_id: {resume_id}\n"
+                f"jd_id: {jd_id}\n"
                 f"Resume PDF path: {resume_path}\n\n"
-                f"Job description text:\n{jd_text}"
+                f"Job description text:\n{jd_text}\n\n"
+                f"Use exactly the resume_id and jd_id given above in every "
+                f"submit_jd_section_scores call -- do not generate your own."
             )
         }]
         ctx = new_ctx()
@@ -96,20 +100,22 @@ def _run_job(job_id, resume_path, jd_path):
 
         result = ctx.get("submit_scores_result")
         if result is None:
-            # The agent finished without calling submit_scores (e.g. an
-            # unrecoverable parse error). Surface it instead of crashing.
             with JOBS_LOCK:
-                JOBS[job_id] = {
-                    "status": "error",
-                    "error": "Agent did not submit scores",
-                    "reply": reply,
-                }
+                JOBS[job_id] = {"status": "error", "error": "Agent did not submit scores", "reply": reply}
             return
 
         pairs = list(db.annotations.find(
-            {"resume_id": result["resume_id"], "jd_id": result["jd_id"]},
-            {"_id": 0},
+            {"resume_id": resume_id, "jd_id": jd_id}, {"_id": 0}
         ))
+        db.score_results.insert_one({
+            "_id": job_id,
+            "resume_id": resume_id,
+            "jd_id": jd_id,
+            "overall_score": result["overall_score"],
+            "reply": reply,
+            "user_id": None,
+            "created_at": datetime.now(timezone.utc),
+        })
         with JOBS_LOCK:
             JOBS[job_id] = {
                 "status": "done",
@@ -117,16 +123,18 @@ def _run_job(job_id, resume_path, jd_path):
                 "overall_score": result["overall_score"],
                 "pairs_stored": result["pairs_stored"],
                 "pairs": pairs,
+                "resume_id": resume_id,
+                "jd_id": jd_id,
             }
     except Exception as e:
         with JOBS_LOCK:
             JOBS[job_id] = {"status": "error", "error": str(e)}
     finally:
-        for path in (resume_path, jd_path):
-            try:
-                os.remove(path)
-            except OSError:
-                pass
+        # Original delete-on-completion behavior, restored.
+        try:
+            os.remove(resume_path)
+        except OSError:
+            pass
 
 
 @app.post("/score")
@@ -141,6 +149,8 @@ def score():
     if not file.filename.lower().endswith(".pdf"):
         return jsonify({"error": "resume_file must be a PDF document"}), 400
 
+    
+
     # Save both inputs to temp files; the agent reads the resume PDF from disk.
     resume_fd, resume_path = tempfile.mkstemp(suffix=".pdf")
     os.close(resume_fd)
@@ -150,14 +160,33 @@ def score():
     with open(jd_path, "w", encoding="utf-8") as f:
         f.write(jd_text)
 
+    resume_id = uuid.uuid4().hex
+    jd_id = uuid.uuid4().hex
     job_id = uuid.uuid4().hex
-    with JOBS_LOCK:
-        JOBS[job_id] = {"status": "running", "stage": "Starting..."}
+    # JD text is cheap -- always persisted immediately, regardless of save.
+    db.job_descriptions.insert_one({
+        "_id": jd_id,
+        "jd_text": jd_text,
+        "user_id": None,
+        "created_at": datetime.now(timezone.utc),
+    })
 
-    thread = threading.Thread(target=_run_job, args=(job_id, resume_path, jd_path), daemon=True)
+    with JOBS_LOCK:
+        JOBS[job_id] = {
+            "status": "running",
+            "stage": "Starting...",
+            "resume_id": resume_id,
+            "jd_id": jd_id,
+        }
+
+    thread = threading.Thread(
+        target=_run_job,
+        args=(job_id, resume_id, resume_path, jd_id, jd_text),
+        daemon=True,
+    )
     thread.start()
 
-    return jsonify({"job_id": job_id}), 202
+    return jsonify({"job_id": job_id, "resume_id": resume_id, "jd_id": jd_id}), 202
 
 
 @app.get("/score/<job_id>/status")

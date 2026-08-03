@@ -37,6 +37,7 @@ func main() {
 	}
 	db := client.Database("resumechecker")
 	User.InitUserCollection(db, envMap["GOOGLE_CLIENT_ID"])
+	Resume.InitCollections(db) 
 
 
 	r := gin.Default()
@@ -60,6 +61,10 @@ func main() {
 	r.GET("/api/parse/:jobId/status", Resume.ScoreStatusHandler)
 	r.GET("/api/auth/me", User.MeHandler)
 	r.POST("/api/auth/logout", User.LogoutHandler)
+
+	r.POST("/api/resumes/save", Resume.SaveResumeHandler)
+	r.POST("/api/jds/save", Resume.SaveJDHandler)
+	r.POST("/api/results/save", Resume.SaveResultHandler)
 
 	r.Run(":8080")
 }

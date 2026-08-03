@@ -54,6 +54,7 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [loginOpen, setLoginOpen] = useState(false);
   const [anchorEl, setAnchorEl] = useState(null);
+  const [jobId, setJobId] = useState(null);
   const menuOpen = Boolean(anchorEl);
 
   const fileInputRef = useRef(null);
@@ -138,6 +139,7 @@ export default function App() {
       const res = await axios.post("/api/parse", formData);
       const jobId = res.data.job_id;
       if (!jobId) throw new Error("No job_id returned from server.");
+      setJobId(jobId);
       pollStatus(jobId);
     } catch (err) {
       setStatus("error");
@@ -161,6 +163,49 @@ export default function App() {
     } finally {
       setUser(null);
       setAnchorEl(null);
+    }
+  };
+
+  const saveResume = async () => {
+    const fd = new FormData();
+    fd.append("resume_file", resumeFile);
+    fd.append("resume_id", result.resume_id);
+    try {
+      await axios
+        .post("/api/resumes/save", fd, { withCredentials: true })
+        .then((res) => {
+          console.log("Resume saved:", res.data);
+        });
+    } catch (err) {
+      setError(err.response?.data?.error || "Failed to save resume.");
+    }
+  };
+
+  const saveJD = async () => {
+    try {
+      await axios
+        .post(
+          "/api/jds/save",
+          { jd_id: result.jd_id },
+          { withCredentials: true },
+        )
+        .then((res) => {
+          console.log("JD saved:", res.data);
+        });
+    } catch (err) {
+      setError(err.response?.data?.error || "Failed to save job description.");
+    }
+  };
+
+  const saveResult = async () => {
+    try {
+      await axios
+        .post("/api/results/save", { job_id: jobId }, { withCredentials: true })
+        .then((res) => {
+          console.log("Result saved:", res.data);
+        });
+    } catch (err) {
+      setError(err.response?.data?.error || "Failed to save result.");
     }
   };
 
@@ -578,6 +623,33 @@ export default function App() {
                 <RotateCcw className="w-3.5 h-3.5" />
                 Score another resume
               </button>
+            )}
+            {user ? (
+              <>
+                <button
+                  onClick={saveResume}
+                  className="w-full h-10 flex items-center justify-center gap-2 rounded-lg text-sm font-medium border border-border text-muted-foreground hover:text-foreground hover:border-[#aa3bff]/40 hover:bg-muted/30 transition-all"
+                >
+                  {/* <RotateCcw className="w-3.5 h-3.5" /> */}
+                  Save this resume
+                </button>
+                <button
+                  onClick={saveJD}
+                  className="w-full h-10 flex items-center justify-center gap-2 rounded-lg text-sm font-medium border border-border text-muted-foreground hover:text-foreground hover:border-[#aa3bff]/40 hover:bg-muted/30 transition-all"
+                >
+                  {/* <RotateCcw className="w-3.5 h-3.5" /> */}
+                  Save this JD
+                </button>
+                <button
+                  onClick={saveResult}
+                  className="w-full h-10 flex items-center justify-center gap-2 rounded-lg text-sm font-medium border border-border text-muted-foreground hover:text-foreground hover:border-[#aa3bff]/40 hover:bg-muted/30 transition-all"
+                >
+                  {/* <RotateCcw className="w-3.5 h-3.5" /> */}
+                  Save this result
+                </button>
+              </>
+            ) : (
+              <></>
             )}
           </div>
         </main>
