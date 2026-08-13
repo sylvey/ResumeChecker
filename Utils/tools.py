@@ -47,6 +47,10 @@ def new_ctx() -> dict:
 
     return {
         "resume": None,
+        # Raw, unclassified (heading -> content) blocks from parse_jd.
+        # classify_jd_sections turns this into "jd" below once the agent has
+        # sorted each block into one of the 4 canonical JD_SECTIONS.
+        "jd_raw_sections": None,
         "jd": None,
         # Populated by submit_jd_section_scores as it goes, so completion
         # (and the final overall score) can be detected automatically once
@@ -65,8 +69,60 @@ def _parse_resume_tool(ctx, pdf_path: str) -> dict:
 
 def _parse_jd_tool(ctx, jd_text: str) -> dict:
     result = parse_jd(jd_text)
-    ctx["jd"] = dict(result)
+    ctx["jd_raw_sections"] = {s["heading"]: s["content"] for s in result["sections"]}
     return result
+
+
+def classify_jd_sections(ctx, job_title, section_labels) -> dict:
+    """Turn parse_jd's raw (heading -> content) blocks into the 4 canonical
+    JD_SECTIONS categories, using the agent's classification of each block
+    instead of keyword matching -- real JD headers ("What Will Make You
+    Successful", "Bonus Points") are worded too inconsistently to pattern-
+    match reliably.
+
+    Every raw heading from parse_jd must appear in section_labels exactly
+    once. job_title is supplied directly, not classified from a block: it's
+    usually the page title, not something written inside the JD body.
+    """
+    if ctx["jd_raw_sections"] is None:
+        raise ValidationError("parse_jd must be called before classify_jd_sections.")
+    if ctx["jd"] is not None:
+        raise ValidationError("classify_jd_sections was already called.")
+
+    raw = ctx["jd_raw_sections"]
+    categories = ("minimum_requirements", "preferred_qualifications", "other_information")
+    buckets = defaultdict(list)
+    seen = set()
+
+    for item in section_labels:
+        heading = item["heading"]
+        category = item["category"]
+        if heading not in raw:
+            raise ValidationError(f"Unknown JD section heading '{heading}'.")
+        if heading in seen:
+            raise ValidationError(f"JD section '{heading}' classified more than once.")
+        if category not in categories:
+            raise ValidationError(f"Invalid category '{category}' for JD section '{heading}'.")
+        seen.add(heading)
+        content = raw[heading]
+        # Some short, data-bearing lines (e.g. "Base Salary: $200,000") get
+        # misdetected as headings with no content beneath them -- include
+        # the heading text itself so that content is never silently lost.
+        text = f"{heading}\n{content}".strip() if content else heading
+        if text:
+            buckets[category].append(text)
+
+    missing = set(raw) - seen
+    if missing:
+        raise ValidationError(f"JD sections not classified: {sorted(missing)}")
+
+    ctx["jd"] = {
+        "job_title": (job_title or "").strip(),
+        "minimum_requirements": "\n\n".join(buckets["minimum_requirements"]),
+        "preferred_qualifications": "\n\n".join(buckets["preferred_qualifications"]),
+        "other_information": "\n\n".join(buckets["other_information"]),
+    }
+    return {"status": "classified", "jd_sections": list(ctx["jd"].keys())}
 
 def submit_jd_section_scores(
     ctx, db, resume_id, jd_id, jd_section_name,
@@ -207,11 +263,13 @@ TOOLS = [
     {
         "name": "parse_jd",
         "description": (
-            "Split a job description into its four sections: job_title, "
-            "minimum_requirements, preferred_qualifications, other_information. Call this "
-            "before scoring. other_information holds whatever didn't belong to the "
-            "requirement sections (company blurb, logistics, benefits) -- it is often "
-            "low-signal, so score it for what is actually there rather than inflating it."
+            "Split a job description into raw sections, each with the heading exactly as "
+            "it appears in the text (e.g. 'Bonus Points', 'What Will Make You Successful'). "
+            "These are NOT yet the 4 canonical categories you score against -- call "
+            "classify_jd_sections next to sort them into job_title, minimum_requirements, "
+            "preferred_qualifications, and other_information based on what each section "
+            "actually says, since real headers are worded too inconsistently to assume "
+            "what a heading means from its name alone."
         ),
         "input_schema": {
             "type": "object",
@@ -222,6 +280,54 @@ TOOLS = [
                 },
             },
             "required": ["jd_text"],
+        },
+    },
+    {
+        "name": "classify_jd_sections",
+        "description": (
+            "Sort parse_jd's raw sections into the 4 canonical categories used for "
+            "scoring: minimum_requirements, preferred_qualifications, and "
+            "other_information -- plus supply job_title directly, since it's usually the "
+            "page title rather than something written in the JD body. Call this once, "
+            "right after parse_jd and before any submit_jd_section_scores call.\n\n"
+            "Judge each raw section by what it actually says, not by what its heading "
+            "sounds like -- a section called 'Core Responsibilities' or 'What You'll Do' "
+            "often describes real day-to-day expectations of the role (closer to "
+            "minimum_requirements) rather than boilerplate; reserve other_information for "
+            "content that is genuinely low-signal (company blurb, logistics, benefits, "
+            "legal boilerplate).\n\n"
+            "Every heading parse_jd returned must appear here exactly once -- if a section "
+            "has no real content, still classify it (other_information is the right home "
+            "for an empty or near-empty section)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "job_title": {
+                    "type": "string",
+                    "description": "The role's title, from context (e.g. a page title) -- not copied from a JD section.",
+                },
+                "section_labels": {
+                    "type": "array",
+                    "description": "One entry per raw section parse_jd returned, each classified exactly once.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "heading": {
+                                "type": "string",
+                                "description": "A raw section heading, exactly as parse_jd returned it.",
+                            },
+                            "category": {
+                                "type": "string",
+                                "enum": ["minimum_requirements", "preferred_qualifications", "other_information"],
+                                "description": "Which canonical category this raw section's content belongs to.",
+                            },
+                        },
+                        "required": ["heading", "category"],
+                    },
+                },
+            },
+            "required": ["job_title", "section_labels"],
         },
     },
     {
@@ -356,6 +462,7 @@ def dispatch(ctx, db, name, tool_input):
     fn = {
         "parse_resume": lambda: _parse_resume_tool(ctx, **tool_input),
         "parse_jd": lambda: _parse_jd_tool(ctx, **tool_input),
+        "classify_jd_sections": lambda: classify_jd_sections(ctx, **tool_input),
         "submit_jd_section_scores": lambda: submit_jd_section_scores(ctx, db, **tool_input),
     }.get(name)
     if fn is None:

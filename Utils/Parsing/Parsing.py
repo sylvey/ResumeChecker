@@ -1,25 +1,10 @@
 import pdfplumber
 from statistics import median
 import os, glob
-import os, glob, re
 
 # JD parsing is fixed-shape; resume parsing is not.
 JD_SECTIONS = ["job_title", "minimum_requirements",
                "preferred_qualifications", "other_information"]
-
-BULLET = re.compile(r"^\s*[•●▪‣◦\-\*·–]+\s*")
-REQ_HDR = re.compile(
-    r"(?i)\b(requirements?|required skills?|must[- ]?have|qualifications?|"
-    r"what (we expect|you('?ll| will)? need)|you (should )?have|"
-    r"necessary skills?|hard skills?|skills? (&|and) experience)\b")
-PREF_HDR = re.compile(
-    r"(?i)\b(nice[- ]?to[- ]?have|preferred|would be a plus|will be a plus|"
-    r"good to have|as a plus|bonus|optional|desirable|advantage)\b")
-OTHER_HDR = re.compile(
-    r"\b(about|who we are|company|team|benefits|perks|what we offer|"
-    r"responsibilities|role|overview|description|culture|mission)\b",
-    re.IGNORECASE,
-)
 
 class ParseError(Exception):
     """Raised when a document can't be read or split into sections."""
@@ -184,49 +169,79 @@ def parse_resume(pdf_path: str) -> dict:
     return {"sections": [{"heading": h, "content": c} for h, c in merged.items()]}
 
 
-def parse_description(text):
-    mins, prefs, bucket = [], [], None
-    rest = []
-    for raw in (text or "").splitlines():
+def _looks_like_jd_heading(line: str) -> bool:
+    """A line reads as a heading if it's short and has no sentence-like
+    punctuation -- true regardless of the exact wording, so it needs no
+    keyword list. Real JD headers ("Bonus Points", "What Will Make You
+    Successful") are short phrases with no punctuation at all; content
+    lines, even short ones ("Must be able to start June 7, 2027",
+    "Stipends: Monthly phone and wellness benefits"), carry a comma/colon
+    somewhere -- not necessarily at the end -- or run long enough to be
+    excluded by word count.
+    """
+    words = line.split()
+    if not words or len(words) > 8:
+        return False
+    return not any(ch in line for ch in ".,;:?!")
+
+
+def split_jd_into_blocks(jd_text: str) -> list:
+    """Split JD text into raw (heading, content) blocks using structure
+    only, no keyword matching -- mirrors split_resume_into_sections'
+    per-line is_heading loop, just with a text-only heading signal instead
+    of font size (plain pasted JD text carries no font info). Real JDs
+    often don't put a blank line between a header and its own bullet list,
+    so headings are detected per line, not by blank-line grouping.
+
+    Text before the first detected heading gets heading="", same as the
+    resume parser's HEADER bucket.
+    """
+    blocks = []
+    current_heading = ""
+    current_lines = []
+
+    for raw in (jd_text or "").splitlines():
         line = raw.strip()
         if not line:
             continue
-        short = len(line.split()) <= 8          # headers are short lines
-        if short and PREF_HDR.search(line):
-            bucket = "pref"; continue
-        if short and REQ_HDR.search(line):
-            bucket = "min"; continue
-        if short and OTHER_HDR.search(line):
-            bucket = None; continue
-        clean = BULLET.sub("", line).strip()
-        if not clean:
-            continue
-        if bucket == "min":
-            mins.append(clean)
-        elif bucket == "pref":
-            prefs.append(clean)
+        if _looks_like_jd_heading(line):
+            blocks.append({
+                "heading": current_heading,
+                "content": "\n".join(current_lines).strip(),
+            })
+            current_heading = line
+            current_lines = []
         else:
-            rest.append(clean)
-    return mins, prefs, rest
- 
-def parse_jd(jd_text: str, job_title: str = "") -> dict:
-    """Tool entry point: split JD text into the 4 canonical sections.
+            current_lines.append(line)
 
-    job_title is supplied by the caller, not parsed out: jd_text is typically a
-    raw page copy (navigation, buttons, company boilerplate) with the title at
-    no fixed position, so identifying it is a judgment call the agent makes.
+    blocks.append({
+        "heading": current_heading,
+        "content": "\n".join(current_lines).strip(),
+    })
+
+    return [b for b in blocks if b["content"] or b["heading"]]
+
+
+def parse_jd(jd_text: str) -> dict:
+    """Tool entry point: split a job description into raw (heading, content)
+    blocks, headings verbatim -- same shape as parse_resume.
+
+    Classifying a block into one of the 4 canonical JD_SECTIONS categories
+    is NOT done here: real JD headers are worded too inconsistently to
+    pattern-match reliably, so that judgment belongs to the agent (see
+    classify_jd_sections in tools.py), the same way job_title is the
+    agent's judgment call, not parsed out.
+
+    Returns {"sections": [{"heading": ..., "content": ...}, ...]}.
     """
     if not jd_text or not jd_text.strip():
         raise ParseError("jd_text is empty.")
 
-    mins, prefs, rest = parse_description(jd_text)
+    blocks = split_jd_into_blocks(jd_text)
+    if not blocks:
+        raise ParseError("Could not find any sections in jd_text.")
 
-    return {
-        "job_title": (job_title or "").strip(),
-        "minimum_requirements": "\n".join(mins),
-        "preferred_qualifications": "\n".join(prefs),
-        "other_information": "\n".join(rest),
-    }
+    return {"sections": blocks}
 
 
 if __name__ == "__main__":
