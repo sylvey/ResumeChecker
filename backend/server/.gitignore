@@ -3,3 +3,4 @@ server
 *.out
 app-go
 .env
+data/
