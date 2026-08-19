@@ -48,6 +48,10 @@ def new_ctx() -> dict:
     return {
         "resume": None,
         "jd": None,
+        # Set by the caller (server.py) before run_agent_turn starts, when
+        # the user supplied a Position -- overrides Claude's own job_title
+        # guess. None means no override; parse_jd falls back to "".
+        "job_title_override": None,
         # Populated by submit_jd_section_scores as it goes, so completion
         # (and the final overall score) can be detected automatically once
         # every JD section -- a fixed, known-size list -- is accounted for.
@@ -64,7 +68,11 @@ def _parse_resume_tool(ctx, pdf_path: str) -> dict:
 
 
 def _parse_jd_tool(ctx, jd_text: str) -> dict:
-    result = parse_jd(jd_text)
+    # job_title isn't exposed to Claude as a tool argument (see TOOLS below) --
+    # it's supplied here, server-side, from ctx["job_title_override"] when the
+    # user filled in a Position, since that's far more reliable than asking
+    # the model to infer a title from raw JD text.
+    result = parse_jd(jd_text, job_title=ctx.get("job_title_override") or "")
     ctx["jd"] = dict(result)
     return result
 

@@ -37,6 +37,11 @@ var ParseHandler = func(c *gin.Context) {
 		return
 	}
 
+	// Optional -- when given, the scoring service uses these as the
+	// authoritative job title instead of inferring one from jd_text.
+	companyName := c.PostForm("company_name")
+	position := c.PostForm("position")
+
 	// 2. Validate the uploaded PDF resume.
 	file, err := c.FormFile("resume_file")
 	if err != nil {
@@ -54,6 +59,14 @@ var ParseHandler = func(c *gin.Context) {
 	writer := multipart.NewWriter(&body)
 
 	if err := writer.WriteField("job_description", jdText); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to build scoring request"})
+		return
+	}
+	if err := writer.WriteField("company_name", companyName); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to build scoring request"})
+		return
+	}
+	if err := writer.WriteField("position", position); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to build scoring request"})
 		return
 	}

@@ -63,8 +63,12 @@ func main() {
 	r.POST("/api/auth/logout", User.LogoutHandler)
 
 	r.POST("/api/resumes/save", Resume.SaveResumeHandler)
-	r.POST("/api/jds/save", Resume.SaveJDHandler)
 	r.POST("/api/results/save", Resume.SaveResultHandler)
+
+	r.GET("/api/results/mine", Resume.ListResultsHandler)
+	r.GET("/api/resumes/:id/download", Resume.DownloadResumeHandler)
+	r.GET("/api/jds/:id/download", Resume.DownloadJDHandler)
+	r.GET("/api/results/:jobId/detail", Resume.ResultDetailHandler)
 
 	r.Run(":8080")
 }
