@@ -237,6 +237,8 @@ var ListResultsHandler = func(c *gin.Context) {
 	type row struct {
 		resultDoc
 		ResumeFilename string `json:"resume_filename"`
+		CompanyName    string `json:"company_name,omitempty"`
+		Position       string `json:"position,omitempty"`
 	}
 	rows := make([]row, 0, len(results))
 	for _, r := range results {
@@ -244,7 +246,21 @@ var ListResultsHandler = func(c *gin.Context) {
 			Filename string `bson:"filename"`
 		}
 		ResumesColl.FindOne(ctx, bson.M{"_id": r.ResumeID}).Decode(&resume)
-		rows = append(rows, row{resultDoc: r, ResumeFilename: resume.Filename})
+
+		var jd struct {
+			CompanyName string `bson:"company_name"`
+			Position    string `bson:"position"`
+		}
+		if JDColl != nil {
+			JDColl.FindOne(ctx, bson.M{"_id": r.JDID}).Decode(&jd)
+		}
+
+		rows = append(rows, row{
+			resultDoc:      r,
+			ResumeFilename: resume.Filename,
+			CompanyName:    jd.CompanyName,
+			Position:       jd.Position,
+		})
 	}
 
 	c.JSON(http.StatusOK, rows)

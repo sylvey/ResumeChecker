@@ -12,6 +12,7 @@ import {
 import axios from "axios";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { Link } from "react-router-dom";
 import Login from "./Login";
 
 const POLL_INTERVAL_MS = 2000;
@@ -237,11 +238,8 @@ export default function App() {
             <MenuItem onClick={() => setAnchorEl(null)}>
               Profile {developingTag}{" "}
             </MenuItem>
-            <MenuItem onClick={() => setAnchorEl(null)}>
-              Saved Resumes{developingTag}
-            </MenuItem>
-            <MenuItem onClick={() => setAnchorEl(null)}>
-              Saved Jobs {developingTag}
+            <MenuItem component={Link} to="/dashboard" onClick={() => setAnchorEl(null)}>
+              Dashboard
             </MenuItem>
             <Divider />
             <MenuItem onClick={handleLogout}>Logout</MenuItem>
