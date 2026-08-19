@@ -46,12 +46,17 @@ export default function App() {
   const [isDark, setIsDark] = useState(false);
   const [resumeFile, setResumeFile] = useState(null);
   const [jdText, setJdText] = useState("");
+  const [companyName, setCompanyName] = useState("");
+  const [position, setPosition] = useState("");
   const [isDragging, setIsDragging] = useState(false);
   const [status, setStatus] = useState(null); // null | "running" | "done" | "error"
   const [stage, setStage] = useState("");
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
   const [user, setUser] = useState(null);
+  const [resumeSaved, setResumeSaved] = useState(false);
+  const [resultSaved, setResultSaved] = useState(false);
+  const [saveError, setSaveError] = useState(null);
   const [loginOpen, setLoginOpen] = useState(false);
   const [anchorEl, setAnchorEl] = useState(null);
   const [jobId, setJobId] = useState(null);
@@ -129,6 +134,8 @@ export default function App() {
     const formData = new FormData();
     formData.append("resume_file", resumeFile);
     formData.append("job_description", jdText);
+    formData.append("company_name", companyName);
+    formData.append("position", position);
 
     setStatus("running");
     setStage("Starting...");
@@ -153,6 +160,9 @@ export default function App() {
     setStage("");
     setResult(null);
     setError(null);
+    setResumeSaved(false);
+    setResultSaved(false);
+    setSaveError(null);
   };
 
   const handleLogout = async () => {
@@ -167,45 +177,25 @@ export default function App() {
   };
 
   const saveResume = async () => {
+    setSaveError(null);
     const fd = new FormData();
     fd.append("resume_file", resumeFile);
     fd.append("resume_id", result.resume_id);
     try {
-      await axios
-        .post("/api/resumes/save", fd, { withCredentials: true })
-        .then((res) => {
-          console.log("Resume saved:", res.data);
-        });
+      await axios.post("/api/resumes/save", fd, { withCredentials: true });
+      setResumeSaved(true);
     } catch (err) {
-      setError(err.response?.data?.error || "Failed to save resume.");
-    }
-  };
-
-  const saveJD = async () => {
-    try {
-      await axios
-        .post(
-          "/api/jds/save",
-          { jd_id: result.jd_id },
-          { withCredentials: true },
-        )
-        .then((res) => {
-          console.log("JD saved:", res.data);
-        });
-    } catch (err) {
-      setError(err.response?.data?.error || "Failed to save job description.");
+      setSaveError(err.response?.data?.error || "Failed to save resume.");
     }
   };
 
   const saveResult = async () => {
+    setSaveError(null);
     try {
-      await axios
-        .post("/api/results/save", { job_id: jobId }, { withCredentials: true })
-        .then((res) => {
-          console.log("Result saved:", res.data);
-        });
+      await axios.post("/api/results/save", { job_id: jobId }, { withCredentials: true });
+      setResultSaved(true);
     } catch (err) {
-      setError(err.response?.data?.error || "Failed to save result.");
+      setSaveError(err.response?.data?.error || "Failed to save result.");
     }
   };
 
@@ -439,6 +429,36 @@ export default function App() {
                 )}
               </div>
 
+              {/* Company / Position */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm font-semibold mb-2 text-foreground">
+                    Company Name
+                  </label>
+                  <input
+                    type="text"
+                    value={companyName}
+                    onChange={(e) => setCompanyName(e.target.value)}
+                    placeholder="e.g. Acme Corp"
+                    disabled={isRunning}
+                    className="w-full h-10 px-3.5 rounded-lg border border-border bg-card text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-[#aa3bff]/30 focus:border-[#aa3bff] transition-all placeholder:text-muted-foreground/50 disabled:opacity-50 disabled:cursor-not-allowed"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold mb-2 text-foreground">
+                    Position
+                  </label>
+                  <input
+                    type="text"
+                    value={position}
+                    onChange={(e) => setPosition(e.target.value)}
+                    placeholder="e.g. Backend Engineer"
+                    disabled={isRunning}
+                    className="w-full h-10 px-3.5 rounded-lg border border-border bg-card text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-[#aa3bff]/30 focus:border-[#aa3bff] transition-all placeholder:text-muted-foreground/50 disabled:opacity-50 disabled:cursor-not-allowed"
+                  />
+                </div>
+              </div>
+
               {/* JD textarea */}
               <div>
                 <label className="block text-sm font-semibold mb-2 text-foreground">
@@ -624,29 +644,33 @@ export default function App() {
                 Score another resume
               </button>
             )}
-            {user ? (
+            {status === "done" && result && user ? (
               <>
                 <button
                   onClick={saveResume}
-                  className="w-full h-10 flex items-center justify-center gap-2 rounded-lg text-sm font-medium border border-border text-muted-foreground hover:text-foreground hover:border-[#aa3bff]/40 hover:bg-muted/30 transition-all"
+                  disabled={resumeSaved}
+                  className={`w-full h-10 flex items-center justify-center gap-2 rounded-lg text-sm font-medium border transition-all ${
+                    resumeSaved
+                      ? "border-border text-muted-foreground/50 cursor-default"
+                      : "border-border text-muted-foreground hover:text-foreground hover:border-[#aa3bff]/40 hover:bg-muted/30"
+                  }`}
                 >
-                  {/* <RotateCcw className="w-3.5 h-3.5" /> */}
-                  Save this resume
-                </button>
-                <button
-                  onClick={saveJD}
-                  className="w-full h-10 flex items-center justify-center gap-2 rounded-lg text-sm font-medium border border-border text-muted-foreground hover:text-foreground hover:border-[#aa3bff]/40 hover:bg-muted/30 transition-all"
-                >
-                  {/* <RotateCcw className="w-3.5 h-3.5" /> */}
-                  Save this JD
+                  {resumeSaved ? "Resume Saved" : "Save this resume"}
                 </button>
                 <button
                   onClick={saveResult}
-                  className="w-full h-10 flex items-center justify-center gap-2 rounded-lg text-sm font-medium border border-border text-muted-foreground hover:text-foreground hover:border-[#aa3bff]/40 hover:bg-muted/30 transition-all"
+                  disabled={resultSaved}
+                  className={`w-full h-10 flex items-center justify-center gap-2 rounded-lg text-sm font-medium border transition-all ${
+                    resultSaved
+                      ? "border-border text-muted-foreground/50 cursor-default"
+                      : "border-border text-muted-foreground hover:text-foreground hover:border-[#aa3bff]/40 hover:bg-muted/30"
+                  }`}
                 >
-                  {/* <RotateCcw className="w-3.5 h-3.5" /> */}
-                  Save this result
+                  {resultSaved ? "Result Saved" : "Save this result"}
                 </button>
+                {saveError && (
+                  <p className="text-sm text-red-500 text-center">{saveError}</p>
+                )}
               </>
             ) : (
               <></>

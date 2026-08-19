@@ -59,7 +59,7 @@ JD_SECTION_LABELS = {
 }
 
 
-def _run_job(job_id, resume_id, resume_path, jd_id, jd_text):
+def _run_job(job_id, resume_id, resume_path, jd_id, jd_text, company_name="", position=""):
     def on_progress(tool_name, tool_input):
         # Both submit_jd_section_scores (the real submission, once reasoning
         # is already done) and a predicted "thinking" call (sent before
@@ -83,10 +83,22 @@ def _run_job(job_id, resume_id, resume_path, jd_id, jd_text):
             JOBS[job_id]["pairs"] = list(ctx["all_pairs"])
 
     try:
+        # Company/Position, when the user fills them in, are ground truth --
+        # far more reliable than asking Claude to infer a job title from raw
+        # JD text. They're surfaced to Claude here so its own reasoning about
+        # job_title lines up with what actually gets stored, and enforced as
+        # ctx["job_title_override"] below as a structural backstop.
+        context_lines = []
+        if company_name:
+            context_lines.append(f"Company: {company_name}")
+        if position:
+            context_lines.append(f"Position: {position}")
+        context_prefix = ("\n".join(context_lines) + "\n\n") if context_lines else ""
+
         messages = [{
             "role": "user",
             "content": (
-                f"Score this resume against this job description.\n\n"
+                f"{context_prefix}Score this resume against this job description.\n\n"
                 f"resume_id: {resume_id}\n"
                 f"jd_id: {jd_id}\n"
                 f"Resume PDF path: {resume_path}\n\n"
@@ -96,6 +108,8 @@ def _run_job(job_id, resume_id, resume_path, jd_id, jd_text):
             )
         }]
         ctx = new_ctx()
+        if position:
+            ctx["job_title_override"] = position.strip()
         reply = run_agent_turn(client, db, ctx, messages, on_progress=on_progress)
 
         result = ctx.get("submit_scores_result")
@@ -143,6 +157,11 @@ def score():
     if not jd_text:
         return jsonify({"error": "job_description field is required"}), 400
 
+    # Optional -- the form works without them, but when given they replace
+    # Claude's own guess at job_title (see _run_job).
+    company_name = (request.form.get("company_name") or "").strip()
+    position = (request.form.get("position") or "").strip()
+
     file = request.files.get("resume_file")
     if file is None or file.filename == "":
         return jsonify({"error": "resume_file field is required"}), 400
@@ -167,6 +186,8 @@ def score():
     db.job_descriptions.insert_one({
         "_id": jd_id,
         "jd_text": jd_text,
+        "company_name": company_name,
+        "position": position,
         "user_id": None,
         "created_at": datetime.now(timezone.utc),
     })
@@ -181,7 +202,7 @@ def score():
 
     thread = threading.Thread(
         target=_run_job,
-        args=(job_id, resume_id, resume_path, jd_id, jd_text),
+        args=(job_id, resume_id, resume_path, jd_id, jd_text, company_name, position),
         daemon=True,
     )
     thread.start()
