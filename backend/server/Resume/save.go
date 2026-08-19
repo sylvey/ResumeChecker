@@ -20,10 +20,11 @@ import (
 const MaxSavedResumes = 3
 
 var (
-	ResumesColl *mongo.Collection
-	JDColl      *mongo.Collection
-	ResultsColl *mongo.Collection
-	storageDir  string
+	ResumesColl     *mongo.Collection
+	JDColl          *mongo.Collection
+	ResultsColl     *mongo.Collection
+	AnnotationsColl *mongo.Collection
+	storageDir      string
 )
 
 // resumeStorageDir is where saved (user-owned) resume PDFs live on EC2.
@@ -35,6 +36,7 @@ func InitCollections(db *mongo.Database) {
 	ResumesColl = db.Collection("resumes")
 	JDColl = db.Collection("job_descriptions")
 	ResultsColl = db.Collection("score_results")
+	AnnotationsColl = db.Collection("annotations")
 
 	storageDir = "data/resumes"
 	if err := os.MkdirAll(storageDir, 0o755); err != nil {
@@ -136,39 +138,15 @@ var SaveResumeHandler = func(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "saved"})
 }
 
-var SaveJDHandler = func(c *gin.Context) {
-	if JDColl == nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "JDColl not initialized"})
-		return
-	}
-	userID, ok := User.CurrentUserID(c)
-	if !ok {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "login required"})
-		return
-	}
-	var body struct {
-		JDID string `json:"jd_id" binding:"required"`
-	}
-	if err := c.ShouldBindJSON(&body); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "jd_id is required"})
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	res, err := JDColl.UpdateOne(ctx,
-		bson.M{"_id": body.JDID},
-		bson.M{"$set": bson.M{"user_id": userID}},
-	)
-	if err != nil || res.MatchedCount == 0 {
-		c.JSON(http.StatusNotFound, gin.H{"error": "job description not found"})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"status": "saved"})
-}
-
+// SaveResultHandler is hit only when the user clicks "Save this result".
+// A result's resume must already be saved (via SaveResumeHandler) before
+// its result can be -- otherwise the dashboard table would have a score
+// with no resume file behind its icon. JD text needs no equivalent check:
+// it's readable straight off the result via DownloadJDHandler, not gated
+// behind its own saved flag.
 var SaveResultHandler = func(c *gin.Context) {
-	if ResultsColl == nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "ResultsColl not initialized"})
+	if ResultsColl == nil || ResumesColl == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "collections not initialized"})
 		return
 	}
 	userID, ok := User.CurrentUserID(c)
@@ -183,8 +161,28 @@ var SaveResultHandler = func(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "job_id is required"})
 		return
 	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+
+	var result struct {
+		ResumeID string `bson:"resume_id"`
+	}
+	if err := ResultsColl.FindOne(ctx, bson.M{"_id": body.JobID}).Decode(&result); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "result not found"})
+		return
+	}
+
+	savedResumeCount, err := ResumesColl.CountDocuments(ctx, bson.M{"_id": result.ResumeID, "user_id": userID})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check saved resume"})
+		return
+	}
+	if savedResumeCount == 0 {
+		c.JSON(http.StatusConflict, gin.H{"error": "Save this resume before saving its result."})
+		return
+	}
+
 	res, err := ResultsColl.UpdateOne(ctx,
 		bson.M{"_id": body.JobID},
 		bson.M{"$set": bson.M{"user_id": userID}},
@@ -194,4 +192,178 @@ var SaveResultHandler = func(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"status": "saved"})
+}
+
+// ListResultsHandler returns the current user's saved results -- one row
+// per scoring, the dashboard table's main data source. Each row's resume
+// is guaranteed to have a filename (SaveResultHandler enforces the resume
+// was saved first); JD text and the full score breakdown are fetched
+// separately, on demand, to keep this list light.
+var ListResultsHandler = func(c *gin.Context) {
+	if ResultsColl == nil || ResumesColl == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "collections not initialized"})
+		return
+	}
+	userID, ok := User.CurrentUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "login required"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	cursor, err := ResultsColl.Find(ctx, bson.M{"user_id": userID})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list results"})
+		return
+	}
+	defer cursor.Close(ctx)
+
+	type resultDoc struct {
+		JobID        string    `bson:"_id" json:"job_id"`
+		ResumeID     string    `bson:"resume_id" json:"resume_id"`
+		JDID         string    `bson:"jd_id" json:"jd_id"`
+		OverallScore float64   `bson:"overall_score" json:"overall_score"`
+		Reply        string    `bson:"reply" json:"reply"`
+		CreatedAt    time.Time `bson:"created_at" json:"created_at"`
+	}
+	var results []resultDoc
+	if err := cursor.All(ctx, &results); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to decode results"})
+		return
+	}
+
+	type row struct {
+		resultDoc
+		ResumeFilename string `json:"resume_filename"`
+	}
+	rows := make([]row, 0, len(results))
+	for _, r := range results {
+		var resume struct {
+			Filename string `bson:"filename"`
+		}
+		ResumesColl.FindOne(ctx, bson.M{"_id": r.ResumeID}).Decode(&resume)
+		rows = append(rows, row{resultDoc: r, ResumeFilename: resume.Filename})
+	}
+
+	c.JSON(http.StatusOK, rows)
+}
+
+// DownloadResumeHandler streams a saved resume's PDF back to its owner.
+var DownloadResumeHandler = func(c *gin.Context) {
+	if ResumesColl == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "ResumesColl not initialized"})
+		return
+	}
+	userID, ok := User.CurrentUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "login required"})
+		return
+	}
+	resumeID := c.Param("id")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var resume struct {
+		Filename    string `bson:"filename"`
+		StoragePath string `bson:"storage_path"`
+		UserID      string `bson:"user_id"`
+	}
+	if err := ResumesColl.FindOne(ctx, bson.M{"_id": resumeID}).Decode(&resume); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "resume not found"})
+		return
+	}
+	if resume.UserID != userID {
+		c.JSON(http.StatusForbidden, gin.H{"error": "not your resume"})
+		return
+	}
+
+	c.FileAttachment(resume.StoragePath, resume.Filename)
+}
+
+// DownloadJDHandler streams a job description's raw text back. JDs aren't
+// separately saved -- authorized instead by the requester owning a saved
+// result that references this jd_id.
+var DownloadJDHandler = func(c *gin.Context) {
+	if JDColl == nil || ResultsColl == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "collections not initialized"})
+		return
+	}
+	userID, ok := User.CurrentUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "login required"})
+		return
+	}
+	jdID := c.Param("id")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	owned, err := ResultsColl.CountDocuments(ctx, bson.M{"jd_id": jdID, "user_id": userID})
+	if err != nil || owned == 0 {
+		c.JSON(http.StatusForbidden, gin.H{"error": "not your job description"})
+		return
+	}
+
+	var jd struct {
+		JDText string `bson:"jd_text"`
+	}
+	if err := JDColl.FindOne(ctx, bson.M{"_id": jdID}).Decode(&jd); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "job description not found"})
+		return
+	}
+
+	c.Header("Content-Disposition", `attachment; filename="jd_`+jdID+`.txt"`)
+	c.Data(http.StatusOK, "text/plain", []byte(jd.JDText))
+}
+
+// ResultDetailHandler returns the full resume-section x JD-section
+// breakdown for one saved result, pulled from the annotations Python
+// writes during scoring. The table row only carries the overall score --
+// this is fetched on demand when the user wants the detail view/download.
+var ResultDetailHandler = func(c *gin.Context) {
+	if ResultsColl == nil || AnnotationsColl == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "collections not initialized"})
+		return
+	}
+	userID, ok := User.CurrentUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "login required"})
+		return
+	}
+	jobID := c.Param("jobId")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var result struct {
+		ResumeID string `bson:"resume_id"`
+		JDID     string `bson:"jd_id"`
+		UserID   string `bson:"user_id"`
+	}
+	if err := ResultsColl.FindOne(ctx, bson.M{"_id": jobID}).Decode(&result); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "result not found"})
+		return
+	}
+	if result.UserID != userID {
+		c.JSON(http.StatusForbidden, gin.H{"error": "not your result"})
+		return
+	}
+
+	cursor, err := AnnotationsColl.Find(ctx, bson.M{"resume_id": result.ResumeID, "jd_id": result.JDID})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch detail"})
+		return
+	}
+	defer cursor.Close(ctx)
+
+	var pairs []bson.M
+	if err := cursor.All(ctx, &pairs); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to decode detail"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"pairs": pairs})
 }
