@@ -138,6 +138,102 @@ var SaveResumeHandler = func(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "saved"})
 }
 
+// ListResumesHandler returns every resume the current user has saved --
+// up to MaxSavedResumes, regardless of whether any of them back a saved
+// result. This is what the "delete a saved resume" UI lists from, since a
+// resume can be saved without its result ever being saved too.
+var ListResumesHandler = func(c *gin.Context) {
+	if ResumesColl == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "ResumesColl not initialized"})
+		return
+	}
+	userID, ok := User.CurrentUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "login required"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	cursor, err := ResumesColl.Find(ctx, bson.M{"user_id": userID})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list resumes"})
+		return
+	}
+	defer cursor.Close(ctx)
+
+	type resumeDoc struct {
+		ID       string    `bson:"_id" json:"resume_id"`
+		Filename string    `bson:"filename" json:"filename"`
+		SavedAt  time.Time `bson:"saved_at" json:"saved_at"`
+	}
+	var resumes []resumeDoc
+	if err := cursor.All(ctx, &resumes); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to decode resumes"})
+		return
+	}
+
+	c.JSON(http.StatusOK, resumes)
+}
+
+// DeleteResumeHandler removes a saved resume -- its Mongo record and its
+// PDF on disk. Blocked if any saved result still references it, so the
+// dashboard's guarantee (every saved result has a real resume behind it)
+// can't be broken by deleting out from under it.
+var DeleteResumeHandler = func(c *gin.Context) {
+	if ResumesColl == nil || ResultsColl == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "collections not initialized"})
+		return
+	}
+	userID, ok := User.CurrentUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "login required"})
+		return
+	}
+	resumeID := c.Param("id")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var resume struct {
+		StoragePath string `bson:"storage_path"`
+		UserID      string `bson:"user_id"`
+	}
+	if err := ResumesColl.FindOne(ctx, bson.M{"_id": resumeID}).Decode(&resume); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "resume not found"})
+		return
+	}
+	if resume.UserID != userID {
+		c.JSON(http.StatusForbidden, gin.H{"error": "not your resume"})
+		return
+	}
+
+	blockingResults, err := ResultsColl.CountDocuments(ctx, bson.M{"resume_id": resumeID, "user_id": userID})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check saved results"})
+		return
+	}
+	if blockingResults > 0 {
+		c.JSON(http.StatusConflict, gin.H{
+			"error": "This resume backs a saved result. Delete that result first.",
+		})
+		return
+	}
+
+	if _, err := ResumesColl.DeleteOne(ctx, bson.M{"_id": resumeID}); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete resume record"})
+		return
+	}
+	if resume.StoragePath != "" {
+		if err := os.Remove(resume.StoragePath); err != nil && !os.IsNotExist(err) {
+			log.Printf("warning: failed to remove resume file %s: %v", resume.StoragePath, err)
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "deleted"})
+}
+
 // SaveResultHandler is hit only when the user clicks "Save this result".
 // A result's resume must already be saved (via SaveResumeHandler) before
 // its result can be -- otherwise the dashboard table would have a score
@@ -192,6 +288,37 @@ var SaveResultHandler = func(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"status": "saved"})
+}
+
+// DeleteResultHandler un-saves a result -- just the score_results doc, no
+// file to remove. Needed so DeleteResumeHandler's "delete that result
+// first" is actually actionable, not another dead-end message.
+var DeleteResultHandler = func(c *gin.Context) {
+	if ResultsColl == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "ResultsColl not initialized"})
+		return
+	}
+	userID, ok := User.CurrentUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "login required"})
+		return
+	}
+	jobID := c.Param("jobId")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	res, err := ResultsColl.DeleteOne(ctx, bson.M{"_id": jobID, "user_id": userID})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete result"})
+		return
+	}
+	if res.DeletedCount == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "result not found"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "deleted"})
 }
 
 // ListResultsHandler returns the current user's saved results -- one row

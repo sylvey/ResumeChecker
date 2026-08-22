@@ -66,9 +66,12 @@ func main() {
 	r.POST("/api/results/save", Resume.SaveResultHandler)
 
 	r.GET("/api/results/mine", Resume.ListResultsHandler)
+	r.GET("/api/resumes/mine", Resume.ListResumesHandler)
 	r.GET("/api/resumes/:id/download", Resume.DownloadResumeHandler)
 	r.GET("/api/jds/:id/download", Resume.DownloadJDHandler)
 	r.GET("/api/results/:jobId/detail", Resume.ResultDetailHandler)
+	r.DELETE("/api/resumes/:id", Resume.DeleteResumeHandler)
+	r.DELETE("/api/results/:jobId", Resume.DeleteResultHandler)
 
 	r.Run(":8080")
 }

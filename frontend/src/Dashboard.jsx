@@ -1,7 +1,7 @@
 import { useState, useEffect, Fragment } from "react";
 import { Link } from "react-router-dom";
 import { Menu, MenuItem, Divider } from "@mui/material";
-import { FileText, Moon, Sun, Download, ChevronDown, ChevronUp } from "lucide-react";
+import { FileText, Moon, Sun, Download, ChevronDown, ChevronUp, Trash2 } from "lucide-react";
 import axios from "axios";
 
 function scoreColor(score) {
@@ -70,6 +70,12 @@ export default function Dashboard() {
   const [detailLoading, setDetailLoading] = useState(null);
   const [detailError, setDetailError] = useState(null);
 
+  const [resumes, setResumes] = useState([]);
+  const [resumesLoading, setResumesLoading] = useState(true);
+  const [resumesError, setResumesError] = useState(null);
+  const [deletingID, setDeletingID] = useState(null);
+  const [deleteError, setDeleteError] = useState(null);
+
   useEffect(() => {
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
     setIsDark(mq.matches);
@@ -94,6 +100,15 @@ export default function Dashboard() {
       .then(({ data }) => setRows(data ?? []))
       .catch((err) => setLoadError(err.response?.data?.error || "Failed to load saved results."))
       .finally(() => setLoading(false));
+  }, [userChecked, user]);
+
+  useEffect(() => {
+    if (!userChecked || !user) return;
+    axios
+      .get("/api/resumes/mine", { withCredentials: true })
+      .then(({ data }) => setResumes(data ?? []))
+      .catch((err) => setResumesError(err.response?.data?.error || "Failed to load saved resumes."))
+      .finally(() => setResumesLoading(false));
   }, [userChecked, user]);
 
   const handleLogout = async () => {
@@ -126,6 +141,33 @@ export default function Dashboard() {
       setDetailError(err.response?.data?.error || "Failed to load detail.");
     } finally {
       setDetailLoading(null);
+    }
+  };
+
+  const deleteResume = async (resumeId) => {
+    setDeleteError(null);
+    setDeletingID(resumeId);
+    try {
+      await axios.delete(`/api/resumes/${resumeId}`, { withCredentials: true });
+      setResumes((prev) => prev.filter((r) => r.resume_id !== resumeId));
+    } catch (err) {
+      setDeleteError(err.response?.data?.error || "Failed to delete resume.");
+    } finally {
+      setDeletingID(null);
+    }
+  };
+
+  const deleteResult = async (jobId) => {
+    setDeleteError(null);
+    setDeletingID(jobId);
+    try {
+      await axios.delete(`/api/results/${jobId}`, { withCredentials: true });
+      setRows((prev) => prev.filter((r) => r.job_id !== jobId));
+      if (openDetailFor === jobId) setOpenDetailFor(null);
+    } catch (err) {
+      setDeleteError(err.response?.data?.error || "Failed to delete result.");
+    } finally {
+      setDeletingID(null);
     }
   };
 
@@ -215,12 +257,62 @@ export default function Dashboard() {
       <main className="max-w-4xl mx-auto px-5 py-10 pb-20">
         <div className="mb-8">
           <h1 className="text-2xl font-bold tracking-tight mb-2 text-foreground">
-            Your Saved Scorings
+            Your Dashboard
           </h1>
           <p className="text-sm text-muted-foreground">
-            Every resume + job description pair you've saved, with its score and full breakdown.
+            Everything you've saved — resumes, job descriptions, and full scoring breakdowns.
           </p>
         </div>
+
+        {deleteError && (
+          <div className="mb-6 p-4 rounded-lg border border-red-200 dark:border-red-800/60 bg-red-50 dark:bg-red-950/40 text-red-700 dark:text-red-400 text-sm flex items-center justify-between gap-3">
+            <span>{deleteError}</span>
+            <button onClick={() => setDeleteError(null)} className="text-xs underline shrink-0">
+              Dismiss
+            </button>
+          </div>
+        )}
+
+        <div className="mb-10">
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground mb-3">
+            Saved Resumes ({resumes.length}/3)
+          </h2>
+          {resumesLoading && (
+            <p className="text-sm text-muted-foreground">Loading...</p>
+          )}
+          {resumesError && <p className="text-sm text-red-500">{resumesError}</p>}
+          {!resumesLoading && !resumesError && resumes.length === 0 && (
+            <p className="text-sm text-muted-foreground">No resumes saved yet.</p>
+          )}
+          {resumes.length > 0 && (
+            <ul className="rounded-xl border border-border divide-y divide-border overflow-hidden">
+              {resumes.map((r) => (
+                <li key={r.resume_id} className="flex items-center justify-between px-4 py-3 text-sm">
+                  <a
+                    href={`/api/resumes/${r.resume_id}/download`}
+                    className="flex items-center gap-2 hover:underline"
+                    style={{ color: "#aa3bff" }}
+                  >
+                    <FileText className="w-4 h-4 shrink-0" />
+                    {r.filename}
+                  </a>
+                  <button
+                    onClick={() => deleteResume(r.resume_id)}
+                    disabled={deletingID === r.resume_id}
+                    className="flex items-center gap-1 text-xs text-muted-foreground hover:text-red-500 transition-colors disabled:opacity-50"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    {deletingID === r.resume_id ? "Deleting..." : "Delete"}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground mb-3">
+          Saved Scorings
+        </h2>
 
         {loading && (
           <p className="text-sm text-muted-foreground text-center py-10">Loading...</p>
@@ -248,6 +340,7 @@ export default function Dashboard() {
                     <th className="px-4 py-3 font-semibold">Job</th>
                     <th className="px-4 py-3 font-semibold">Score</th>
                     <th className="px-4 py-3 font-semibold">Detail</th>
+                    <th className="px-4 py-3 font-semibold">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -306,10 +399,20 @@ export default function Dashboard() {
                               {isOpen ? "Hide" : "View"}
                             </button>
                           </td>
+                          <td className="px-4 py-3">
+                            <button
+                              onClick={() => deleteResult(row.job_id)}
+                              disabled={deletingID === row.job_id}
+                              className="flex items-center gap-1 text-xs text-muted-foreground hover:text-red-500 transition-colors disabled:opacity-50"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                              {deletingID === row.job_id ? "Deleting..." : "Delete"}
+                            </button>
+                          </td>
                         </tr>
                         {isOpen && (
                           <tr className="border-t border-border bg-muted/20">
-                            <td colSpan={4} className="px-4 py-4">
+                            <td colSpan={5} className="px-4 py-4">
                               {detailLoading === row.job_id && (
                                 <p className="text-xs text-muted-foreground">Loading detail...</p>
                               )}
