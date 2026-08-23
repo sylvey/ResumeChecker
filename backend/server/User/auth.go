@@ -18,9 +18,10 @@ import (
 var userCollection *mongo.Collection
 var googleClientID string
 
-func InitUserCollection(db *mongo.Database, clientID string) {
+func InitUserCollection(db *mongo.Database, clientID string, jwtSecretStr string) {
 	userCollection = db.Collection("users")
 	googleClientID = clientID
+	jwtSecret = []byte(jwtSecretStr)
 
 	userCollection.Indexes().CreateOne(context.Background(), mongo.IndexModel{
 		Keys:    bson.M{"google_id": 1},
