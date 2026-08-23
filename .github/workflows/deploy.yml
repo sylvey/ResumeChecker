@@ -3,6 +3,8 @@ name: Deploy to EC2
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
 
 jobs:
   test:
@@ -32,6 +34,10 @@ jobs:
 
   deploy:
     needs: test
+    # Only deploy on an actual merge to main -- pull_request events also
+    # satisfy `needs: test`, so without this, every PR would try to SSH
+    # into EC2 and deploy unmerged code.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - name: Deploy via SSH
