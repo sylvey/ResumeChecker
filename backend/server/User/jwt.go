@@ -8,7 +8,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-var jwtSecret = []byte("換成一個夠長夠亂的字串,放進 .env 管理")
+var jwtSecret []byte
 
 type Claims struct {
 	UserID string `json:"user_id"`

@@ -28,6 +28,11 @@ func main() {
 		log.Fatal("MONGO_URI is not set in .env")
 	}
 
+	jwtSecret := envMap["JWT_SECRET"]
+	if jwtSecret == "" {
+		log.Fatal("JWT_SECRET is not set in .env")
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -36,7 +41,7 @@ func main() {
 		log.Fatal("mongo connect failed:", err)
 	}
 	db := client.Database("resumechecker")
-	User.InitUserCollection(db, envMap["GOOGLE_CLIENT_ID"])
+	User.InitUserCollection(db, envMap["GOOGLE_CLIENT_ID"], jwtSecret)
 
 
 	r := gin.Default()
