@@ -64,6 +64,7 @@ func main() {
 
 	r.GET("/api/parse/:jobId/status", Resume.ScoreStatusHandler)
 	r.GET("/api/auth/me", User.MeHandler)
+	r.PATCH("/api/auth/me", User.UpdateProfileHandler)
 	r.POST("/api/auth/logout", User.LogoutHandler)
 
 	r.Run(":8080")

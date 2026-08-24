@@ -94,24 +94,74 @@ func findOrCreateUser(ctx context.Context, googleID, email, name, picture string
 	return &user, nil
 }
 
-func MeHandler(c *gin.Context) {
+// currentUserID reads the session cookie and returns the logged-in user's
+// ObjectID, or writes the appropriate 401 response itself and returns false.
+func currentUserID(c *gin.Context) (primitive.ObjectID, bool) {
 	cookie, err := c.Cookie("session")
 	if err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "not logged in"})
-		return
+		return primitive.ObjectID{}, false
 	}
 
 	claims, err := parseSessionJWT(cookie)
 	if err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid session"})
+		return primitive.ObjectID{}, false
+	}
+
+	objID, err := primitive.ObjectIDFromHex(claims.UserID)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid session"})
+		return primitive.ObjectID{}, false
+	}
+	return objID, true
+}
+
+func MeHandler(c *gin.Context) {
+	objID, ok := currentUserID(c)
+	if !ok {
 		return
 	}
 
-	objID, _ := primitive.ObjectIDFromHex(claims.UserID)
 	var user models.User
-	err = userCollection.FindOne(context.Background(), bson.M{"_id": objID}).Decode(&user)
+	err := userCollection.FindOne(context.Background(), bson.M{"_id": objID}).Decode(&user)
 	if err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "user not found"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"user": user})
+}
+
+type UpdateProfileReq struct {
+	Bio      string `json:"bio"`
+	LinkedIn string `json:"linkedin"`
+	Website  string `json:"website"`
+}
+
+func UpdateProfileHandler(c *gin.Context) {
+	objID, ok := currentUserID(c)
+	if !ok {
+		return
+	}
+
+	var req UpdateProfileReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	update := bson.M{"$set": bson.M{
+		"bio":      req.Bio,
+		"linkedin": req.LinkedIn,
+		"website":  req.Website,
+	}}
+	opts := options.FindOneAndUpdate().SetReturnDocument(options.After)
+
+	var user models.User
+	err := userCollection.FindOneAndUpdate(context.Background(), bson.M{"_id": objID}, update, opts).Decode(&user)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "db error"})
 		return
 	}
 
