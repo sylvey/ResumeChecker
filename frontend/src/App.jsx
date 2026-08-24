@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Menu, MenuItem, Divider } from "@mui/material";
+import { Link } from "react-router-dom";
 import {
   Upload,
   X,
@@ -12,7 +13,6 @@ import {
 import axios from "axios";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Link } from "react-router-dom";
 import Login from "./Login";
 
 const POLL_INTERVAL_MS = 2000;
@@ -211,9 +211,6 @@ export default function App() {
       acc[section].push(pair);
       return acc;
     }, {}) ?? {};
-  const developingTag = (
-    <span className="text-xs text-muted-foreground ml-1">(Developing)</span>
-  );
   const loginButtons = (
     <>
       {user ? (
@@ -235,8 +232,12 @@ export default function App() {
             anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
             transformOrigin={{ vertical: "top", horizontal: "right" }}
           >
-            <MenuItem onClick={() => setAnchorEl(null)}>
-              Profile {developingTag}{" "}
+            <MenuItem
+              component={Link}
+              to="/profile"
+              onClick={() => setAnchorEl(null)}
+            >
+              Profile
             </MenuItem>
             <MenuItem component={Link} to="/dashboard" onClick={() => setAnchorEl(null)}>
               Dashboard

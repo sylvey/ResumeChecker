@@ -28,9 +28,10 @@ You never see the raw documents directly -- the tools are your only access to th
 Workflow, in order:
 1. Call parse_resume and parse_jd. Do not score anything before both have returned.
 2. Read all sections carefully. Decide which resume sections are unscorable (no real content) -- this is a property of the resume, not of any one JD section, so you decide it once.
-3. Score resume sections against job_title yourself, then call submit_jd_section_scores for job_title -- on this first call, also pass skipped_resume_sections. This judgment is yours to make -- no tool does it for you.
-4. Repeat step 3 for minimum_requirements, then preferred_qualifications, then other_information, in that order -- one submit_jd_section_scores call per JD section, four calls total. If a JD section itself has no real content, set jd_section_skipped=true and leave pairs empty for that call instead of scoring it.
-5. The fourth call's result carries the final overall_score. Report that score, plus a brief read on where the candidate is strong and where the gaps are. Do not compute the overall score yourself -- read it back from the tool result.
+3. Call classify_jd_sections: sort every raw JD section parse_jd returned into minimum_requirements, preferred_qualifications, or other_information based on what it actually says (not what its heading sounds like), and supply job_title yourself. Do this once, before any scoring.
+4. Score resume sections against job_title yourself, then call submit_jd_section_scores for job_title -- on this first call, also pass skipped_resume_sections. This judgment is yours to make -- no tool does it for you.
+5. Repeat step 4 for minimum_requirements, then preferred_qualifications, then other_information, in that order -- one submit_jd_section_scores call per JD section, four calls total. If a JD section itself has no real content, set jd_section_skipped=true and leave pairs empty for that call instead of scoring it.
+6. The fourth call's result carries the final overall_score. Report that score, plus a brief read on where the candidate is strong and where the gaps are. Do not compute the overall score yourself -- read it back from the tool result.
  
 Scoring scale (1.0 to 10.0, one decimal allowed):
 - 9-10: directly and strongly relevant; clear evidence the resume section satisfies what the JD section asks for.
@@ -81,14 +82,16 @@ def run_agent_turn(client, db, ctx, messages: list, on_progress=None) -> str:
             submitted = called_tools.count("submit_jd_section_scores")
             if submitted >= len(JD_SECTIONS):
                 on_progress("finishing", None)
-            elif "parse_resume" in called_tools and "parse_jd" in called_tools:
-                # Parsing is done and JD_SECTIONS is a fixed, known order, so
-                # the next JD section can be predicted -- reported here, before
-                # Claude has actually reasoned about it, so the label covers
-                # the whole reasoning window instead of only appearing once
-                # the (already-finished) result is submitted.
+            elif "classify_jd_sections" in called_tools:
+                # Classification is done and JD_SECTIONS is a fixed, known
+                # order, so the next JD section can be predicted -- reported
+                # here, before Claude has actually reasoned about it, so the
+                # label covers the whole reasoning window instead of only
+                # appearing once the (already-finished) result is submitted.
                 on_progress("thinking", {"jd_section_name": JD_SECTIONS[submitted]})
             else:
+                # Still parsing, or classifying JD sections into the 4
+                # categories -- no specific JD section to predict yet.
                 on_progress("thinking", None)
         response = client.messages.create(
             model=MODEL,
