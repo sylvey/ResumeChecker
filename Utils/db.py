@@ -34,4 +34,8 @@ def get_db():
     # The training exporter reads by source (llm vs human) and by score band.
     db.annotations.create_index([("source", ASCENDING)], name="by_source")
     db.annotations.create_index([("matching_score", ASCENDING)], name="by_score")
+
+    db.job_descriptions.create_index([("user_id", ASCENDING)], name="by_user")
+    db.score_results.create_index([("user_id", ASCENDING)], name="by_user")
+    db.score_results.create_index([("resume_id", ASCENDING), ("jd_id", ASCENDING)], name="by_pair")
     return db

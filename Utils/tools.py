@@ -52,6 +52,10 @@ def new_ctx() -> dict:
         # sorted each block into one of the 4 canonical JD_SECTIONS.
         "jd_raw_sections": None,
         "jd": None,
+        # Set by the caller (server.py) before run_agent_turn starts, when
+        # the user supplied a Position -- overrides Claude's own job_title
+        # guess in classify_jd_sections. None means no override.
+        "job_title_override": None,
         # Populated by submit_jd_section_scores as it goes, so completion
         # (and the final overall score) can be detected automatically once
         # every JD section -- a fixed, known-size list -- is accounted for.
@@ -83,6 +87,10 @@ def classify_jd_sections(ctx, job_title, section_labels) -> dict:
     Every raw heading from parse_jd must appear in section_labels exactly
     once. job_title is supplied directly, not classified from a block: it's
     usually the page title, not something written inside the JD body.
+
+    When the user filled in a Position on the scoring form, ctx["job_title_override"]
+    silently overrides whatever job_title the agent supplies -- ground truth
+    from the form beats the model's own guess from raw JD text.
     """
     if ctx["jd_raw_sections"] is None:
         raise ValidationError("parse_jd must be called before classify_jd_sections.")
@@ -117,7 +125,7 @@ def classify_jd_sections(ctx, job_title, section_labels) -> dict:
         raise ValidationError(f"JD sections not classified: {sorted(missing)}")
 
     ctx["jd"] = {
-        "job_title": (job_title or "").strip(),
+        "job_title": (ctx.get("job_title_override") or job_title or "").strip(),
         "minimum_requirements": "\n\n".join(buckets["minimum_requirements"]),
         "preferred_qualifications": "\n\n".join(buckets["preferred_qualifications"]),
         "other_information": "\n\n".join(buckets["other_information"]),

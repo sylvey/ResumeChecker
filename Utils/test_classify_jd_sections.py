@@ -34,6 +34,19 @@ def test_happy_path_builds_ctx_jd(ctx):
     assert ctx["jd"]["preferred_qualifications"] == ""
 
 
+def test_job_title_override_beats_agent_guess(ctx):
+    # When the user filled in a Position on the scoring form, it's ground
+    # truth and must win over whatever job_title the agent supplies.
+    ctx["job_title_override"] = "Backend Engineer"
+    classify_jd_sections(ctx, job_title="Software Engineer Intern", section_labels=SECTION_LABELS)
+    assert ctx["jd"]["job_title"] == "Backend Engineer"
+
+
+def test_no_override_falls_back_to_agent_job_title(ctx):
+    classify_jd_sections(ctx, job_title="Software Engineer Intern", section_labels=SECTION_LABELS)
+    assert ctx["jd"]["job_title"] == "Software Engineer Intern"
+
+
 def test_heading_with_empty_content_is_not_dropped(ctx):
     # Regression test: a heading like "Base Salary: $200,000" with nothing
     # beneath it must still contribute its own text, not vanish.

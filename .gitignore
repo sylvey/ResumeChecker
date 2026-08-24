@@ -6,3 +6,5 @@ node_modules/
 requirements_pip.txtUtils/Parsing/job_descriptions_tech.json
 *.json
 *.zip
+*.pdf
+*.env
