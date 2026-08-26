@@ -94,22 +94,17 @@ func findOrCreateUser(ctx context.Context, googleID, email, name, picture string
 	return &user, nil
 }
 
-// currentUserID reads the session cookie and returns the logged-in user's
-// ObjectID, or writes the appropriate 401 response itself and returns false.
+// currentUserID resolves the logged-in user's ObjectID via the shared
+// CurrentUserID (session.go) -- the single place cookie/JWT parsing happens
+// -- or writes the appropriate 401 response itself and returns false.
 func currentUserID(c *gin.Context) (primitive.ObjectID, bool) {
-	cookie, err := c.Cookie("session")
-	if err != nil {
+	idHex, ok := CurrentUserID(c)
+	if !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "not logged in"})
 		return primitive.ObjectID{}, false
 	}
 
-	claims, err := parseSessionJWT(cookie)
-	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid session"})
-		return primitive.ObjectID{}, false
-	}
-
-	objID, err := primitive.ObjectIDFromHex(claims.UserID)
+	objID, err := primitive.ObjectIDFromHex(idHex)
 	if err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid session"})
 		return primitive.ObjectID{}, false
