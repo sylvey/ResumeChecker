@@ -36,7 +36,12 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		panic(err)
 	}
-	testDB = client.Database("resumechecker_test")
+	// A package-specific database name -- go test ./... runs different
+	// packages' test binaries in parallel by default, and TestMain's
+	// teardown below drops the whole database. A name shared with another
+	// package's tests (e.g. User's) means whichever one finishes first can
+	// drop the database out from under the other mid-run.
+	testDB = client.Database("resumechecker_test_resume")
 
 	InitCollections(testDB)
 	User.InitUserCollection(testDB, "unused-google-client-id", testJWTSecret)
