@@ -32,7 +32,9 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		panic(err)
 	}
-	testDB = client.Database("resumechecker_test")
+	// A package-specific database name -- see the matching comment in
+	// Resume/save_test.go for why sharing one across packages is unsafe.
+	testDB = client.Database("resumechecker_test_user")
 
 	InitUserCollection(testDB, "unused-google-client-id", testJWTSecret)
 
