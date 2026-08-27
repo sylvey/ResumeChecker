@@ -31,6 +31,17 @@ jobs:
         env:
           MONGO_URI: mongodb://localhost:27017
         run: pytest -q
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/server/go.mod
+      # Writes to its own "resumechecker_test" database in the same mongodb
+      # service container above, so it can't collide with the pytest run's
+      # data even though both share one container.
+      - name: Run Go tests
+        working-directory: backend/server
+        env:
+          MONGO_URI: mongodb://localhost:27017
+        run: go test ./...
 
   deploy:
     needs: test
