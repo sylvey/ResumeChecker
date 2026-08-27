@@ -7,9 +7,9 @@ import (
 )
 
 // CurrentUserID reads the session cookie, validates the JWT, and returns
-// the logged-in user's ID as a hex string. Exported so other packages
-// (Resume, etc.) can gate handlers on login without duplicating the
-// cookie/JWT logic that MeHandler already has.
+// the logged-in user's ID as a hex string. The one place cookie/JWT parsing
+// happens -- every other auth check in this codebase (MeHandler's
+// currentUserID included) is built on top of this rather than re-parsing.
 func CurrentUserID(c *gin.Context) (string, bool) {
 	cookie, err := c.Cookie("session")
 	if err != nil {
