@@ -121,6 +121,7 @@ export default function Dashboard() {
   const menuOpen = Boolean(anchorEl);
 
   const [filterQuery, setFilterQuery] = useState("");
+  const [sortBy, setSortBy] = useState("newest");
 
   const [openDetailFor, setOpenDetailFor] = useState(null);
   const [detailPairs, setDetailPairs] = useState({});
@@ -251,6 +252,20 @@ export default function Dashboard() {
     );
   });
 
+  const sortedRows = [...filteredRows].sort((a, b) => {
+    switch (sortBy) {
+      case "oldest":
+        return new Date(a.created_at) - new Date(b.created_at);
+      case "score-high":
+        return b.overall_score - a.overall_score;
+      case "score-low":
+        return a.overall_score - b.overall_score;
+      case "newest":
+      default:
+        return new Date(b.created_at) - new Date(a.created_at);
+    }
+  });
+
   const header = (
     <header className="sticky top-0 z-20 border-b border-border bg-background/80 backdrop-blur-md">
       <div className="max-w-6xl mx-auto px-5 h-14 flex items-center justify-between">
@@ -282,7 +297,7 @@ export default function Dashboard() {
                 alt={user.name}
                 referrerPolicy="no-referrer"
               />
-              <span className="text-sm">{user.name}</span>
+              <span className="text-sm hidden sm:inline">{user.name}</span>
               <Menu
                 anchorEl={anchorEl}
                 open={menuOpen}
@@ -349,7 +364,7 @@ export default function Dashboard() {
         </div>
       )}
 
-      <main className="max-w-6xl mx-auto px-5 py-8 pb-20 grid grid-cols-1 md:grid-cols-[260px_1fr] gap-8">
+      <main className="max-w-6xl mx-auto px-5 py-8 pb-20 grid grid-cols-1 md:grid-cols-[260px_1fr] gap-6 md:gap-8">
         {/* Left rail -- profile, links, saved resumes */}
         <aside className="space-y-5">
           <div className="flex items-center gap-3">
@@ -418,7 +433,7 @@ export default function Dashboard() {
                     <button
                       onClick={() => deleteResume(r.resume_id)}
                       disabled={deletingID === r.resume_id}
-                      className="shrink-0 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-red-500 transition-all disabled:opacity-50"
+                      className="shrink-0 opacity-100 md:opacity-0 md:group-hover:opacity-100 text-muted-foreground hover:text-red-500 transition-all disabled:opacity-50"
                       aria-label={`Delete ${r.filename}`}
                     >
                       <Trash2 className="w-3.5 h-3.5" />
@@ -442,8 +457,8 @@ export default function Dashboard() {
 
         {/* Main content -- toolbar + saved scorings table */}
         <div className="min-w-0">
-          <div className="flex items-center gap-3 mb-5">
-            <div className="relative flex-1 max-w-xs">
+          <div className="flex flex-wrap items-center gap-3 mb-5">
+            <div className="relative flex-1 min-w-[160px] max-w-xs">
               <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground/60" />
               <input
                 type="text"
@@ -453,6 +468,17 @@ export default function Dashboard() {
                 className="w-full h-9 pl-8 pr-3 rounded-lg border border-border bg-card text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-[#aa3bff]/30 focus:border-[#aa3bff] transition-all placeholder:text-muted-foreground/50"
               />
             </div>
+            <select
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value)}
+              aria-label="Sort saved scorings"
+              className="h-9 px-3 rounded-lg border border-border bg-card text-foreground text-sm shrink-0 focus:outline-none focus:ring-2 focus:ring-[#aa3bff]/30 focus:border-[#aa3bff] transition-all"
+            >
+              <option value="newest">Newest first</option>
+              <option value="oldest">Oldest first</option>
+              <option value="score-high">Highest score</option>
+              <option value="score-low">Lowest score</option>
+            </select>
             <span className="text-xs text-muted-foreground shrink-0">
               {rows.length} saved scoring{rows.length === 1 ? "" : "s"}
             </span>
@@ -481,13 +507,13 @@ export default function Dashboard() {
             </p>
           )}
 
-          {!loading && rows.length > 0 && filteredRows.length === 0 && (
+          {!loading && rows.length > 0 && sortedRows.length === 0 && (
             <p className="text-sm text-muted-foreground text-center py-10">
               No saved scorings match "{filterQuery}".
             </p>
           )}
 
-          {!loading && filteredRows.length > 0 && (
+          {!loading && sortedRows.length > 0 && (
             <div className="rounded-xl border border-border overflow-hidden">
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
@@ -501,7 +527,7 @@ export default function Dashboard() {
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredRows.map((row) => {
+                    {sortedRows.map((row) => {
                       const isOpen = openDetailFor === row.job_id;
                       return (
                         <Fragment key={row.job_id}>
@@ -516,39 +542,42 @@ export default function Dashboard() {
                               {formatDate(row.created_at)}
                             </td>
                             <td className="px-4 py-3">
-                              <ScoreRing score={row.overall_score} />
-                            </td>
-                            <td className="px-4 py-3">
-                              <div className="flex items-center gap-1.5 flex-wrap">
-                                <a
-                                  href={`/api/resumes/${row.resume_id}/download`}
-                                  className="h-7 px-2.5 flex items-center rounded-md text-xs font-medium border border-border text-muted-foreground hover:text-foreground hover:border-[#aa3bff]/40 hover:bg-muted/30 transition-all"
-                                >
-                                  Resume
-                                </a>
-                                <a
-                                  href={`/api/jds/${row.jd_id}/download`}
-                                  className="h-7 px-2.5 flex items-center rounded-md text-xs font-medium border border-border text-muted-foreground hover:text-foreground hover:border-[#aa3bff]/40 hover:bg-muted/30 transition-all"
-                                >
-                                  Job description
-                                </a>
-                                <button
-                                  onClick={() => downloadReport(row)}
-                                  disabled={reportDownloading === row.job_id}
-                                  className="h-7 px-2.5 flex items-center rounded-md text-xs font-medium border border-border text-muted-foreground hover:text-foreground hover:border-[#aa3bff]/40 hover:bg-muted/30 transition-all disabled:opacity-50"
-                                >
-                                  {reportDownloading === row.job_id ? "..." : "Score report"}
-                                </button>
+                              <div className="flex items-center gap-1">
+                                <ScoreRing score={row.overall_score} />
                                 <button
                                   onClick={() => toggleDetail(row)}
                                   className="h-7 w-7 flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/30 transition-all shrink-0"
-                                  aria-label={isOpen ? "Hide breakdown" : "View breakdown"}
+                                  aria-label={isOpen ? "Hide score breakdown" : "Preview score breakdown"}
+                                  title={isOpen ? "Hide score breakdown" : "Preview score breakdown"}
                                 >
                                   {isOpen ? (
                                     <ChevronUp className="w-3.5 h-3.5" />
                                   ) : (
                                     <ChevronDown className="w-3.5 h-3.5" />
                                   )}
+                                </button>
+                              </div>
+                            </td>
+                            <td className="px-4 py-3">
+                              <div className="flex items-center gap-1.5 flex-nowrap">
+                                <a
+                                  href={`/api/resumes/${row.resume_id}/download`}
+                                  className="h-7 px-2.5 flex items-center rounded-md text-xs font-medium border border-border text-muted-foreground hover:text-foreground hover:border-[#aa3bff]/40 hover:bg-muted/30 transition-all whitespace-nowrap"
+                                >
+                                  Resume
+                                </a>
+                                <a
+                                  href={`/api/jds/${row.jd_id}/download`}
+                                  className="h-7 px-2.5 flex items-center rounded-md text-xs font-medium border border-border text-muted-foreground hover:text-foreground hover:border-[#aa3bff]/40 hover:bg-muted/30 transition-all whitespace-nowrap"
+                                >
+                                  Job description
+                                </a>
+                                <button
+                                  onClick={() => downloadReport(row)}
+                                  disabled={reportDownloading === row.job_id}
+                                  className="h-7 px-2.5 flex items-center rounded-md text-xs font-medium border border-border text-muted-foreground hover:text-foreground hover:border-[#aa3bff]/40 hover:bg-muted/30 transition-all disabled:opacity-50 whitespace-nowrap"
+                                >
+                                  {reportDownloading === row.job_id ? "..." : "Score report"}
                                 </button>
                                 <button
                                   onClick={() => deleteResult(row.job_id)}
