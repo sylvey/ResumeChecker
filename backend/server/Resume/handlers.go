@@ -2,6 +2,7 @@ package Resume
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -9,7 +10,11 @@ import (
 	"path/filepath"
 	"time"
 
+	"server/User"
+
 	"github.com/gin-gonic/gin"
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 // scoreServiceBaseURL is where the Python Flask agent pipeline listens.
@@ -29,7 +34,47 @@ var httpClient = &http.Client{Timeout: 5 * time.Minute}
 
 // ParseHandler validates the uploaded resume + job description and forwards them
 // to the Python scoring service, relaying its response back to the caller.
+// anonymousAttemptAllowed atomically increments the attempt counter for this
+// IP and reports whether it's still within MaxAnonymousAttempts. Using
+// FindOneAndUpdate with $inc (rather than count-then-insert) makes the
+// increment-and-check a single atomic operation, so two simultaneous
+// requests from the same IP can't both slip through the check.
+func anonymousAttemptAllowed(c *gin.Context) (bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var doc struct {
+		Attempts int `bson:"attempts"`
+	}
+	err := AnonymousAttemptsColl.FindOneAndUpdate(
+		ctx,
+		bson.M{"_id": c.ClientIP()},
+		bson.M{"$inc": bson.M{"attempts": 1}},
+		options.FindOneAndUpdate().SetUpsert(true).SetReturnDocument(options.After),
+	).Decode(&doc)
+	if err != nil {
+		return false, err
+	}
+	return doc.Attempts <= MaxAnonymousAttempts, nil
+}
+
 var ParseHandler = func(c *gin.Context) {
+	// 0. Anonymous requests are cost-limited -- each one is a real, paid
+	// Claude API call. Logged-in users aren't subject to this.
+	if _, loggedIn := User.CurrentUserID(c); !loggedIn {
+		allowed, err := anonymousAttemptAllowed(c)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check usage limit"})
+			return
+		}
+		if !allowed {
+			c.JSON(http.StatusTooManyRequests, gin.H{
+				"error": "You've used your free scoring attempt. Log in to score more resumes.",
+			})
+			return
+		}
+	}
+
 	// 1. Validate the job description text.
 	jdText := c.PostForm("job_description")
 	if jdText == "" {
