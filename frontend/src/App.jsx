@@ -151,7 +151,7 @@ export default function App() {
       pollStatus(jobId);
     } catch (err) {
       setStatus("error");
-      setError(err.message);
+      setError(err.response?.data?.error || err.message);
     }
   };
 

@@ -19,12 +19,19 @@ import (
 
 const MaxSavedResumes = 3
 
+// MaxAnonymousAttempts caps how many times a single IP can hit /api/parse
+// without logging in -- each attempt is a real, paid Claude API call, so
+// this is a cost-control gate, not a UX nicety. Logged-in users aren't
+// subject to it.
+const MaxAnonymousAttempts = 1
+
 var (
-	ResumesColl     *mongo.Collection
-	JDColl          *mongo.Collection
-	ResultsColl     *mongo.Collection
-	AnnotationsColl *mongo.Collection
-	storageDir      string
+	ResumesColl           *mongo.Collection
+	JDColl                *mongo.Collection
+	ResultsColl           *mongo.Collection
+	AnnotationsColl       *mongo.Collection
+	AnonymousAttemptsColl *mongo.Collection
+	storageDir            string
 )
 
 // resumeStorageDir is where saved (user-owned) resume PDFs live on EC2.
@@ -37,6 +44,7 @@ func InitCollections(db *mongo.Database) {
 	JDColl = db.Collection("job_descriptions")
 	ResultsColl = db.Collection("score_results")
 	AnnotationsColl = db.Collection("annotations")
+	AnonymousAttemptsColl = db.Collection("anonymous_attempts")
 
 	storageDir = "data/resumes"
 	if err := os.MkdirAll(storageDir, 0o755); err != nil {
