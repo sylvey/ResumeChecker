@@ -13,6 +13,7 @@ import {
   Link2,
 } from "lucide-react";
 import axios from "axios";
+import SavedResumes from "./SavedResumes";
 
 const RING_RADIUS = 14;
 const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
@@ -129,9 +130,6 @@ export default function Dashboard() {
   const [detailError, setDetailError] = useState(null);
   const [reportDownloading, setReportDownloading] = useState(null);
 
-  const [resumes, setResumes] = useState([]);
-  const [resumesLoading, setResumesLoading] = useState(true);
-  const [resumesError, setResumesError] = useState(null);
   const [deletingID, setDeletingID] = useState(null);
   const [deleteError, setDeleteError] = useState(null);
 
@@ -154,15 +152,6 @@ export default function Dashboard() {
       .then(({ data }) => setRows(data ?? []))
       .catch((err) => setLoadError(err.response?.data?.error || "Failed to load saved results."))
       .finally(() => setLoading(false));
-  }, [userChecked, user]);
-
-  useEffect(() => {
-    if (!userChecked || !user) return;
-    axios
-      .get("/api/resumes/mine", { withCredentials: true })
-      .then(({ data }) => setResumes(data ?? []))
-      .catch((err) => setResumesError(err.response?.data?.error || "Failed to load saved resumes."))
-      .finally(() => setResumesLoading(false));
   }, [userChecked, user]);
 
   const handleLogout = async () => {
@@ -213,19 +202,6 @@ export default function Dashboard() {
     setReportDownloading(null);
     if (pairs) {
       downloadTextBlob(`${row.job_id}_detail.txt`, formatDetailAsText(row, pairs));
-    }
-  };
-
-  const deleteResume = async (resumeId) => {
-    setDeleteError(null);
-    setDeletingID(resumeId);
-    try {
-      await axios.delete(`/api/resumes/${resumeId}`, { withCredentials: true });
-      setResumes((prev) => prev.filter((r) => r.resume_id !== resumeId));
-    } catch (err) {
-      setDeleteError(err.response?.data?.error || "Failed to delete resume.");
-    } finally {
-      setDeletingID(null);
     }
   };
 
@@ -410,38 +386,7 @@ export default function Dashboard() {
           )}
 
           <div className="border-t border-border pt-4">
-            <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2.5">
-              Saved Resumes ({resumes.length}/3)
-            </h2>
-            {resumesLoading && <p className="text-xs text-muted-foreground">Loading...</p>}
-            {resumesError && <p className="text-xs text-red-500">{resumesError}</p>}
-            {!resumesLoading && !resumesError && resumes.length === 0 && (
-              <p className="text-xs text-muted-foreground">No resumes saved yet.</p>
-            )}
-            {resumes.length > 0 && (
-              <ul className="space-y-1.5">
-                {resumes.map((r) => (
-                  <li key={r.resume_id} className="group flex items-center justify-between gap-2">
-                    <a
-                      href={`/api/resumes/${r.resume_id}/download`}
-                      className="flex items-center gap-1.5 text-xs hover:underline min-w-0"
-                      style={{ color: "#aa3bff" }}
-                    >
-                      <FileText className="w-3.5 h-3.5 shrink-0" />
-                      <span className="truncate">{r.filename}</span>
-                    </a>
-                    <button
-                      onClick={() => deleteResume(r.resume_id)}
-                      disabled={deletingID === r.resume_id}
-                      className="shrink-0 opacity-100 md:opacity-0 md:group-hover:opacity-100 text-muted-foreground hover:text-red-500 transition-all disabled:opacity-50"
-                      aria-label={`Delete ${r.filename}`}
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
+            <SavedResumes />
           </div>
 
           <div className="border-t border-border pt-4">

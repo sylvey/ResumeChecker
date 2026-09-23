@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -150,6 +151,22 @@ func insertResult(t *testing.T, jobID, resumeID, jdID, userID string, score floa
 	}
 }
 
+func insertAnnotation(t *testing.T, resumeID, jdID, sectionName, sectionContent string) {
+	t.Helper()
+	_, err := AnnotationsColl.InsertOne(context.Background(), bson.M{
+		"resume_id":              resumeID,
+		"jd_id":                  jdID,
+		"resume_section_name":    sectionName,
+		"resume_section_content": sectionContent,
+		"jd_section_name":        "minimum_requirements",
+		"matching_score":         5.0,
+		"rationale":              "test fixture",
+	})
+	if err != nil {
+		t.Fatalf("failed to insert annotation fixture: %v", err)
+	}
+}
+
 func insertJD(t *testing.T, jdID, jdText string) {
 	t.Helper()
 	_, err := JDColl.InsertOne(context.Background(), bson.M{
@@ -262,7 +279,7 @@ func TestSaveResultHandler_SucceedsOnceResumeSaved(t *testing.T) {
 	}
 }
 
-func TestDeleteResumeHandler_BlockedByExistingResult(t *testing.T) {
+func TestDeleteResumeHandler_SucceedsEvenWithExistingResult(t *testing.T) {
 	resetCollections(t)
 	router := newRouter()
 	cookie := sessionCookie("user-3")
@@ -275,21 +292,15 @@ func TestDeleteResumeHandler_BlockedByExistingResult(t *testing.T) {
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusConflict {
-		t.Fatalf("expected 409, got %d: %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
-	if got := decodeError(t, rec); got != "This resume backs a saved result. Delete that result first." {
-		t.Errorf("unexpected error message: %q", got)
-	}
-
-	// The resume must still exist -- the block should be a no-op, not a
-	// partial delete.
 	count, err := ResumesColl.CountDocuments(context.Background(), bson.M{"_id": "resume-3"})
 	if err != nil {
 		t.Fatalf("count failed: %v", err)
 	}
-	if count != 1 {
-		t.Errorf("expected resume-3 to still exist, count=%d", count)
+	if count != 0 {
+		t.Errorf("expected resume-3 to be gone, count=%d", count)
 	}
 }
 
@@ -330,6 +341,56 @@ func TestDownloadResumeHandler_ForbiddenForOtherUser(t *testing.T) {
 
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("expected 403, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestDownloadResumeHandler_FallsBackToTextWhenDeleted(t *testing.T) {
+	resetCollections(t)
+	router := newRouter()
+	cookie := sessionCookie("user-10")
+
+	insertResume(t, "resume-10", "user-10")
+	insertResult(t, "job-10", "resume-10", "jd-10", "user-10", 7.0)
+	insertAnnotation(t, "resume-10", "jd-10", "Experience", "Built things at a company.")
+
+	delReq := httptest.NewRequest(http.MethodDelete, "/api/resumes/resume-10", nil)
+	delReq.AddCookie(cookie)
+	delRec := httptest.NewRecorder()
+	router.ServeHTTP(delRec, delReq)
+	if delRec.Code != http.StatusOK {
+		t.Fatalf("setup: delete expected 200, got %d: %s", delRec.Code, delRec.Body.String())
+	}
+
+	dlReq := httptest.NewRequest(http.MethodGet, "/api/resumes/resume-10/download", nil)
+	dlReq.AddCookie(cookie)
+	dlRec := httptest.NewRecorder()
+	router.ServeHTTP(dlRec, dlReq)
+
+	if dlRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", dlRec.Code, dlRec.Body.String())
+	}
+	if ct := dlRec.Header().Get("Content-Type"); ct != "text/plain" {
+		t.Errorf("expected text/plain, got %q", ct)
+	}
+	if body := dlRec.Body.String(); !strings.Contains(body, "Experience") || !strings.Contains(body, "Built things at a company.") {
+		t.Errorf("expected reconstructed text to contain the section, got: %q", body)
+	}
+}
+
+func TestDownloadResumeHandler_DeletedAndUnreferencedStillNotFound(t *testing.T) {
+	resetCollections(t)
+	router := newRouter()
+	cookie := sessionCookie("user-11")
+
+	// Nothing was ever saved under this ID -- no resume record, no result
+	// referencing it either, so there's nothing to fall back to.
+	req := httptest.NewRequest(http.MethodGet, "/api/resumes/never-existed/download", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 

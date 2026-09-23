@@ -32,8 +32,6 @@ func scoreServiceBaseURL() string {
 // so give the forwarded request a generous timeout.
 var httpClient = &http.Client{Timeout: 5 * time.Minute}
 
-// ParseHandler validates the uploaded resume + job description and forwards them
-// to the Python scoring service, relaying its response back to the caller.
 // anonymousAttemptAllowed atomically increments the attempt counter for this
 // IP and reports whether it's still within MaxAnonymousAttempts. Using
 // FindOneAndUpdate with $inc (rather than count-then-insert) makes the
@@ -58,10 +56,81 @@ func anonymousAttemptAllowed(c *gin.Context) (bool, error) {
 	return doc.Attempts <= MaxAnonymousAttempts, nil
 }
 
+// resumeSourceError carries the HTTP status a resolveResumeSource failure
+// should map to, so ParseHandler doesn't have to re-derive it.
+type resumeSourceError struct {
+	status int
+	msg    string
+}
+
+func (e *resumeSourceError) Error() string { return e.msg }
+
+func resumeSourceErrorResponse(err error) (int, string) {
+	if rse, ok := err.(*resumeSourceError); ok {
+		return rse.status, rse.msg
+	}
+	return http.StatusInternalServerError, "Failed to read resume"
+}
+
+// resolveResumeSource returns the filename and a reader for the resume to
+// score -- either a saved resume (savedResumeID, ownership-checked against
+// userID) or the uploaded resume_file field. The returned close func must
+// always be called, even on error (where it's a no-op), to release the file
+// handle.
+func resolveResumeSource(c *gin.Context, savedResumeID, userID string) (string, io.Reader, func(), error) {
+	noop := func() {}
+
+	if savedResumeID != "" {
+		var resume struct {
+			Filename    string `bson:"filename"`
+			StoragePath string `bson:"storage_path"`
+			UserID      string `bson:"user_id"`
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := ResumesColl.FindOne(ctx, bson.M{"_id": savedResumeID}).Decode(&resume); err != nil {
+			return "", nil, noop, &resumeSourceError{http.StatusNotFound, "saved resume not found"}
+		}
+		if resume.UserID != userID {
+			return "", nil, noop, &resumeSourceError{http.StatusForbidden, "not your resume"}
+		}
+		f, err := os.Open(resume.StoragePath)
+		if err != nil {
+			return "", nil, noop, &resumeSourceError{http.StatusInternalServerError, "failed to read saved resume"}
+		}
+		return resume.Filename, f, func() { f.Close() }, nil
+	}
+
+	file, err := c.FormFile("resume_file")
+	if err != nil {
+		return "", nil, noop, &resumeSourceError{http.StatusBadRequest, "resume_file field is required"}
+	}
+	if filepath.Ext(file.Filename) != ".pdf" {
+		return "", nil, noop, &resumeSourceError{http.StatusBadRequest, "resume_file must be a PDF document"}
+	}
+	src, err := file.Open()
+	if err != nil {
+		return "", nil, noop, &resumeSourceError{http.StatusInternalServerError, "Failed to read uploaded file"}
+	}
+	return file.Filename, src, func() { src.Close() }, nil
+}
+
+// ParseHandler validates the resume + job description and forwards them to
+// the Python scoring service, relaying its response back to the caller.
+// The resume is either a fresh upload (resume_file) or a reference to one
+// already saved (saved_resume_id) -- see resolveResumeSource.
 var ParseHandler = func(c *gin.Context) {
+	userID, loggedIn := User.CurrentUserID(c)
+
+	savedResumeID := c.PostForm("saved_resume_id")
+	if savedResumeID != "" && !loggedIn {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "login required to use a saved resume"})
+		return
+	}
+
 	// 0. Anonymous requests are cost-limited -- each one is a real, paid
 	// Claude API call. Logged-in users aren't subject to this.
-	if _, loggedIn := User.CurrentUserID(c); !loggedIn {
+	if !loggedIn {
 		allowed, err := anonymousAttemptAllowed(c)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check usage limit"})
@@ -87,16 +156,15 @@ var ParseHandler = func(c *gin.Context) {
 	companyName := c.PostForm("company_name")
 	position := c.PostForm("position")
 
-	// 2. Validate the uploaded PDF resume.
-	file, err := c.FormFile("resume_file")
+	// 2. Resolve the resume: either a saved one (by reference) or a fresh
+	// upload.
+	resumeFilename, resumeReader, closeReader, err := resolveResumeSource(c, savedResumeID, userID)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "resume_file field is required"})
+		status, msg := resumeSourceErrorResponse(err)
+		c.JSON(status, gin.H{"error": msg})
 		return
 	}
-	if filepath.Ext(file.Filename) != ".pdf" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "resume_file must be a PDF document"})
-		return
-	}
+	defer closeReader()
 
 	// 3. Rebuild the multipart form so it can be forwarded to the scoring
 	//    service with the same field names the frontend sent.
@@ -115,21 +183,23 @@ var ParseHandler = func(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to build scoring request"})
 		return
 	}
-
-	src, err := file.Open()
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to read uploaded file"})
-		return
+	if savedResumeID != "" {
+		// Reuse the saved resume's own ID for this run, so its results land
+		// under a resume_id already saved to the user's account -- see
+		// server.py's /score route.
+		if err := writer.WriteField("resume_id", savedResumeID); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to build scoring request"})
+			return
+		}
 	}
-	defer src.Close()
 
-	part, err := writer.CreateFormFile("resume_file", file.Filename)
+	part, err := writer.CreateFormFile("resume_file", resumeFilename)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to build scoring request"})
 		return
 	}
-	if _, err := io.Copy(part, src); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to copy uploaded file"})
+	if _, err := io.Copy(part, resumeReader); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to copy resume file"})
 		return
 	}
 	if err := writer.Close(); err != nil {

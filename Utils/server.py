@@ -179,7 +179,12 @@ def score():
     with open(jd_path, "w", encoding="utf-8") as f:
         f.write(jd_text)
 
-    resume_id = uuid.uuid4().hex
+    # Normally minted fresh, but the Go backend passes an existing saved
+    # resume's own _id here when the user picked a saved resume instead of
+    # uploading a new one -- reusing that ID means this run's results land
+    # under a resume_id already saved to their account, so no separate
+    # "save this resume" step is needed afterward.
+    resume_id = (request.form.get("resume_id") or "").strip() or uuid.uuid4().hex
     jd_id = uuid.uuid4().hex
     job_id = uuid.uuid4().hex
     # JD text is cheap -- always persisted immediately, regardless of save.
