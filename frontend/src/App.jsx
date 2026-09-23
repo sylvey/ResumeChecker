@@ -55,6 +55,8 @@ export default function App() {
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
   const [user, setUser] = useState(null);
+  const [resumes, setResumes] = useState([]);
+  const [selectedSavedResumeId, setSelectedSavedResumeId] = useState(null);
   const [resumeSaved, setResumeSaved] = useState(false);
   const [resultSaved, setResultSaved] = useState(false);
   const [saveError, setSaveError] = useState(null);
@@ -86,11 +88,25 @@ export default function App() {
       .catch(() => setUser(null));
   }, []);
 
+  useEffect(() => {
+    if (!user) return;
+    axios
+      .get("/api/resumes/mine", { withCredentials: true })
+      .then(({ data }) => setResumes(data ?? []))
+      .catch(() => {});
+  }, [user]);
+
   const handleFileSelect = useCallback((file) => {
     if (file.type === "application/pdf" || file.name.endsWith(".pdf")) {
       setResumeFile(file);
+      setSelectedSavedResumeId(null);
     }
   }, []);
+
+  const selectSavedResume = (resumeId) => {
+    setSelectedSavedResumeId(resumeId);
+    setResumeFile(null);
+  };
 
   const handleDrop = useCallback(
     (e) => {
@@ -130,10 +146,14 @@ export default function App() {
   };
 
   const onSubmit = async () => {
-    if (!resumeFile || !jdText.trim()) return;
+    if ((!resumeFile && !selectedSavedResumeId) || !jdText.trim()) return;
 
     const formData = new FormData();
-    formData.append("resume_file", resumeFile);
+    if (selectedSavedResumeId) {
+      formData.append("saved_resume_id", selectedSavedResumeId);
+    } else {
+      formData.append("resume_file", resumeFile);
+    }
     formData.append("job_description", jdText);
     formData.append("company_name", companyName);
     formData.append("position", position);
@@ -144,7 +164,7 @@ export default function App() {
     setError(null);
 
     try {
-      const res = await axios.post("/api/parse", formData);
+      const res = await axios.post("/api/parse", formData, { withCredentials: true });
       const jobId = res.data.job_id;
       if (!jobId) throw new Error("No job_id returned from server.");
       setJobId(jobId);
@@ -164,6 +184,7 @@ export default function App() {
     setResumeSaved(false);
     setResultSaved(false);
     setSaveError(null);
+    setSelectedSavedResumeId(null);
   };
 
   const handleLogout = async () => {
@@ -201,7 +222,9 @@ export default function App() {
   };
 
   const isRunning = status === "running";
-  const canSubmit = resumeFile !== null && jdText.trim().length > 0;
+  const canSubmit =
+    (resumeFile !== null || selectedSavedResumeId !== null) && jdText.trim().length > 0;
+  const selectedSavedResume = resumes.find((r) => r.resume_id === selectedSavedResumeId);
   const overallColors = result ? scoreColor(result.overall_score) : null;
 
   const groupedPairs =
@@ -376,7 +399,54 @@ export default function App() {
                       <X className="w-3.5 h-3.5" />
                     </button>
                   </div>
+                ) : selectedSavedResumeId ? (
+                  <div className="flex items-center gap-3 px-3 py-2.5 rounded-lg border border-border bg-card text-sm">
+                    <div
+                      className="w-7 h-7 rounded-md flex items-center justify-center shrink-0"
+                      style={{ background: "#aa3bff1a" }}
+                    >
+                      <FileText
+                        className="w-3.5 h-3.5"
+                        style={{ color: "#aa3bff" }}
+                      />
+                    </div>
+                    <span className="flex-1 truncate font-medium text-sm">
+                      {selectedSavedResume?.filename || "Saved resume"}
+                    </span>
+                    <span className="text-xs text-muted-foreground shrink-0">
+                      Saved resume
+                    </span>
+                    <button
+                      onClick={() => setSelectedSavedResumeId(null)}
+                      disabled={isRunning}
+                      className="shrink-0 text-muted-foreground hover:text-foreground transition-colors disabled:opacity-40 disabled:cursor-not-allowed ml-1"
+                      aria-label="Change resume"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
                 ) : (
+                  <>
+                    {user && resumes.length > 0 && (
+                      <div className="mb-2.5">
+                        <p className="text-xs text-muted-foreground mb-1.5">
+                          Or choose a saved resume
+                        </p>
+                        <div className="flex flex-wrap gap-2">
+                          {resumes.map((r) => (
+                            <button
+                              key={r.resume_id}
+                              type="button"
+                              onClick={() => selectSavedResume(r.resume_id)}
+                              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border border-border text-xs font-medium text-muted-foreground hover:text-foreground hover:border-[#aa3bff]/40 hover:bg-muted/30 transition-all"
+                            >
+                              <FileText className="w-3 h-3" />
+                              {r.filename}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   <div
                     onDragOver={(e) => {
                       e.preventDefault();
@@ -425,6 +495,7 @@ export default function App() {
                       }}
                     />
                   </div>
+                  </>
                 )}
               </div>
 
@@ -645,17 +716,19 @@ export default function App() {
             )}
             {status === "done" && result && user ? (
               <>
-                <button
-                  onClick={saveResume}
-                  disabled={resumeSaved}
-                  className={`w-full h-10 flex items-center justify-center gap-2 rounded-lg text-sm font-medium border transition-all ${
-                    resumeSaved
-                      ? "border-border text-muted-foreground/50 cursor-default"
-                      : "border-border text-muted-foreground hover:text-foreground hover:border-[#aa3bff]/40 hover:bg-muted/30"
-                  }`}
-                >
-                  {resumeSaved ? "Resume Saved" : "Save this resume"}
-                </button>
+                {!selectedSavedResumeId && (
+                  <button
+                    onClick={saveResume}
+                    disabled={resumeSaved}
+                    className={`w-full h-10 flex items-center justify-center gap-2 rounded-lg text-sm font-medium border transition-all ${
+                      resumeSaved
+                        ? "border-border text-muted-foreground/50 cursor-default"
+                        : "border-border text-muted-foreground hover:text-foreground hover:border-[#aa3bff]/40 hover:bg-muted/30"
+                    }`}
+                  >
+                    {resumeSaved ? "Resume Saved" : "Save this resume"}
+                  </button>
+                )}
                 <button
                   onClick={saveResult}
                   disabled={resultSaved}

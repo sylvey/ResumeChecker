@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { ArrowLeft, Moon, Sun, Pencil, Link2 } from "lucide-react";
 import axios from "axios";
+import SavedResumes from "./SavedResumes";
 
 export default function Profile() {
   const [isDark, setIsDark] = useState(
@@ -250,6 +251,10 @@ export default function Profile() {
                 </div>
               </div>
             )}
+
+            <div className="border-t border-border pt-6">
+              <SavedResumes />
+            </div>
           </div>
         )}
       </main>

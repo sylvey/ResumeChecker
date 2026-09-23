@@ -7,12 +7,14 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"server/User"
 
 	"github.com/gin-gonic/gin"
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
@@ -61,12 +63,21 @@ func InitCollections(db *mongo.Database) {
 	})
 }
 
-// SaveResumeHandler is hit only when the user clicks "Save this resume".
-// The frontend re-sends the actual PDF bytes (still held in React state
-// from the original upload) plus the resume_id it got back from /score, so
-// the saved file's identity lines up with the annotations already stored
-// under that resume_id.
+// SaveResumeHandler is hit either when the user clicks "Save this resume"
+// after a scoring run -- the frontend re-sends the actual PDF bytes (still
+// held in React state from the original upload) plus the resume_id it got
+// back from /score, so the saved file's identity lines up with the
+// annotations already stored under that resume_id -- or as a standalone
+// upload (from Profile/Dashboard), with no prior scoring run to have minted
+// a resume_id, in which case one is generated here.
 var SaveResumeHandler = func(c *gin.Context) {
+	// Every early-return path below (auth, cap check) can fire before the
+	// multipart body -- a real PDF upload -- has been read at all. Left
+	// undrained, a dev proxy (Vite) mid-write of that body sees the
+	// connection close and throws EPIPE; draining it here regardless of how
+	// the handler exits avoids that.
+	defer io.Copy(io.Discard, c.Request.Body)
+
 	if ResumesColl == nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "ResumesColl not initialized — Resume.InitCollections(db) was not called in main.go"})
 		return
@@ -79,8 +90,7 @@ var SaveResumeHandler = func(c *gin.Context) {
 
 	resumeID := c.PostForm("resume_id")
 	if resumeID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "resume_id is required"})
-		return
+		resumeID = primitive.NewObjectID().Hex()
 	}
 
 	file, err := c.FormFile("resume_file")
@@ -186,11 +196,12 @@ var ListResumesHandler = func(c *gin.Context) {
 }
 
 // DeleteResumeHandler removes a saved resume -- its Mongo record and its
-// PDF on disk. Blocked if any saved result still references it, so the
-// dashboard's guarantee (every saved result has a real resume behind it)
-// can't be broken by deleting out from under it.
+// PDF on disk. Deleting is always allowed, even if a saved result still
+// references this resume_id: DownloadResumeHandler falls back to a text
+// reconstruction (from annotations) once the PDF record is gone, so no
+// result is ever left with a broken download.
 var DeleteResumeHandler = func(c *gin.Context) {
-	if ResumesColl == nil || ResultsColl == nil {
+	if ResumesColl == nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "collections not initialized"})
 		return
 	}
@@ -214,18 +225,6 @@ var DeleteResumeHandler = func(c *gin.Context) {
 	}
 	if resume.UserID != userID {
 		c.JSON(http.StatusForbidden, gin.H{"error": "not your resume"})
-		return
-	}
-
-	blockingResults, err := ResultsColl.CountDocuments(ctx, bson.M{"resume_id": resumeID, "user_id": userID})
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check saved results"})
-		return
-	}
-	if blockingResults > 0 {
-		c.JSON(http.StatusConflict, gin.H{
-			"error": "This resume backs a saved result. Delete that result first.",
-		})
 		return
 	}
 
@@ -401,10 +400,48 @@ var ListResultsHandler = func(c *gin.Context) {
 	c.JSON(http.StatusOK, rows)
 }
 
-// DownloadResumeHandler streams a saved resume's PDF back to its owner.
+// reconstructResumeText rebuilds a plain-text version of a resume from its
+// annotations -- used when the original PDF (and its resumes record) has
+// been deleted but a saved result still references this resume_id. The same
+// resume_section_content is duplicated across every JD the resume was
+// scored against, so this dedupes by section name. Returns ("", nil) if
+// there's nothing to reconstruct.
+func reconstructResumeText(ctx context.Context, resumeID string) (string, error) {
+	cursor, err := AnnotationsColl.Find(ctx, bson.M{"resume_id": resumeID})
+	if err != nil {
+		return "", err
+	}
+	defer cursor.Close(ctx)
+
+	type pair struct {
+		SectionName    string `bson:"resume_section_name"`
+		SectionContent string `bson:"resume_section_content"`
+	}
+	seen := make(map[string]bool)
+	var b strings.Builder
+	for cursor.Next(ctx) {
+		var p pair
+		if err := cursor.Decode(&p); err != nil {
+			continue
+		}
+		if seen[p.SectionName] {
+			continue
+		}
+		seen[p.SectionName] = true
+		b.WriteString("=== " + p.SectionName + " ===\n")
+		b.WriteString(p.SectionContent)
+		b.WriteString("\n\n")
+	}
+	return b.String(), nil
+}
+
+// DownloadResumeHandler streams a saved resume back to its owner -- the
+// original PDF if it's still saved, or a text reconstruction (see
+// reconstructResumeText) if it's since been deleted but a saved result
+// still references it.
 var DownloadResumeHandler = func(c *gin.Context) {
-	if ResumesColl == nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "ResumesColl not initialized"})
+	if ResumesColl == nil || ResultsColl == nil || AnnotationsColl == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "collections not initialized"})
 		return
 	}
 	userID, ok := User.CurrentUserID(c)
@@ -422,16 +459,32 @@ var DownloadResumeHandler = func(c *gin.Context) {
 		StoragePath string `bson:"storage_path"`
 		UserID      string `bson:"user_id"`
 	}
-	if err := ResumesColl.FindOne(ctx, bson.M{"_id": resumeID}).Decode(&resume); err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "resume not found"})
-		return
-	}
-	if resume.UserID != userID {
-		c.JSON(http.StatusForbidden, gin.H{"error": "not your resume"})
+	if err := ResumesColl.FindOne(ctx, bson.M{"_id": resumeID}).Decode(&resume); err == nil {
+		if resume.UserID != userID {
+			c.JSON(http.StatusForbidden, gin.H{"error": "not your resume"})
+			return
+		}
+		c.FileAttachment(resume.StoragePath, resume.Filename)
 		return
 	}
 
-	c.FileAttachment(resume.StoragePath, resume.Filename)
+	// No resume record -- deleted, or never existed. Fall back to a text
+	// reconstruction, but only if the caller owns a result that actually
+	// references this resume_id (same shape as DownloadJDHandler's check).
+	owned, err := ResultsColl.CountDocuments(ctx, bson.M{"resume_id": resumeID, "user_id": userID})
+	if err != nil || owned == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "resume not found"})
+		return
+	}
+
+	text, err := reconstructResumeText(ctx, resumeID)
+	if err != nil || text == "" {
+		c.JSON(http.StatusNotFound, gin.H{"error": "resume not found"})
+		return
+	}
+
+	c.Header("Content-Disposition", `attachment; filename="resume_`+resumeID+`.txt"`)
+	c.Data(http.StatusOK, "text/plain", []byte(text))
 }
 
 // DownloadJDHandler streams a job description's raw text back. JDs aren't
